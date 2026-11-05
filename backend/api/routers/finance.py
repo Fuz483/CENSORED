@@ -1,0 +1,68 @@
+from typing import Dict
+from fastapi import APIRouter, status
+from schemas.booking import RoomType
+from schemas.finance import (
+    FinanceCalculateRequest,
+    FinanceCalculateResponse,
+    FinanceSplitBreakdown,
+)
+
+router = APIRouter(prefix="/api/v1/finance", tags=["Финансовый модуль"])
+
+# Базовые часовые тарифные ставки по категориям помещений (в белорусских рублях)
+BASE_HOURLY_RATES: Dict[RoomType, float] = {
+    RoomType.sport_hall: 45.00,
+    RoomType.assembly_hall: 60.00,
+    RoomType.it_lab: 35.00,
+    RoomType.workshop: 30.00,
+}
+
+
+def calculate_decree_150_split(
+    type_room: RoomType,
+    hours: float,
+) -> FinanceCalculateResponse:
+    """
+    Расчет итоговой стоимости аренды и нормативное расщепление платежа (Указ № 150):
+    - 40% — возмещение коммунальных услуг;
+    - 30% — перечисление в доход бюджета;
+    - 15% — фонд оплаты труда (ФОТ);
+    - 15% — фонд развития учреждения образования.
+    """
+    hourly_rate = BASE_HOURLY_RATES[type_room]
+    total_amount = round(hourly_rate * hours, 2)
+
+    utilities = round(total_amount * 0.40, 2)
+    budget = round(total_amount * 0.30, 2)
+    payroll = round(total_amount * 0.15, 2)
+    # Вычисление остатка для точного соблюдения баланса при округлении копеек
+    development = round(total_amount - (utilities + budget + payroll), 2)
+
+    return FinanceCalculateResponse(
+        type_room=type_room,
+        hours=hours,
+        hourly_rate=hourly_rate,
+        total_amount=total_amount,
+        distribution=FinanceSplitBreakdown(
+            utilities_40_percent=utilities,
+            budget_30_percent=budget,
+            payroll_fund_15_percent=payroll,
+            school_development_15_percent=development,
+        ),
+    )
+
+
+@router.post(
+    "/calculate",
+    response_model=FinanceCalculateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Расчет финансового распределения платежа",
+)
+async def calculate_finance_endpoint(
+    payload: FinanceCalculateRequest,
+) -> FinanceCalculateResponse:
+    """Эндпоинт расчета стоимости аренды и пропорционального распределения суммы."""
+    return calculate_decree_150_split(
+        type_room=payload.type_room,
+        hours=payload.hours,
+    )
