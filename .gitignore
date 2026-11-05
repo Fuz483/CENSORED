@@ -1,0 +1,104 @@
+# ==========================================
+# JAVASCRIPT / NODEJS
+# ==========================================
+# Зависимости (самая тяжелая папка)
+node_modules/
+jspm_packages/
+
+# Логи и отчеты об ошибках
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Папки сборки (билды фронтенда)
+dist/
+build/
+.next/
+.nuxt/
+out/
+
+# Файлы локальных настроек и ключей
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Кэш инструментов
+.eslintcache
+.stylelintcache
+.parcel-cache
+.turbo/
+
+# ==========================================
+# PYTHON
+# ==========================================
+# Байт-код (кэш компиляции)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Виртуальные окружения (все популярные названия)
+.venv/
+venv/
+ENV/
+env/
+pip-wheel-metadata/
+
+# Распределенные пакеты и сборка
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Логи Python и отчеты
+pip-log.txt
+poetry.lock
+# Примечание: pipenv и poetry лок-файлы обычно коммитят, 
+# но если они вам не нужны в гите, их можно скрыть.
+
+# Тесты и покрытие кода
+.htmlcov/
+.tox/
+.nosexy/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.coveragerc
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# ==========================================
+# РЕДАКТОРЫ И СИСТЕМА (VS Code, PyCharm, Mac, Win)
+# ==========================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
