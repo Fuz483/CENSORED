@@ -1,33 +1,42 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
     container_name: smartspace_db
+    restart: always
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: smartuser
-      POSTGRES_PASSWORD: smartpassword
-      POSTGRES_DB: smartspace
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-smartspace}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U smartuser -d smartspace"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-smartspace}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: smartspace_backend
+    restart: always
+    env_file:
+      - .env
     ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://smartuser:smartpassword@db:5432/smartspace
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
+    command: >
+      sh -c "mkdir -p alembic/versions &&
+             alembic upgrade head &&
+             python -m scripts.seed &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
 volumes:
   postgres_data:
