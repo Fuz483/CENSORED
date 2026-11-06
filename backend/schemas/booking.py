@@ -2,7 +2,7 @@ import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RoomType(str, Enum):
@@ -12,6 +12,7 @@ class RoomType(str, Enum):
     assembly_hall = "assembly_hall"
     it_lab = "it_lab"
     workshop = "workshop"
+    pool = "pool"
 
 
 class BookingState(str, Enum):
@@ -33,14 +34,20 @@ class BookingCreate(BaseModel):
     room: str = Field(..., min_length=1, max_length=128, description="Номер или идентификатор помещения")
     date: datetime.date = Field(..., description="Дата бронирования (YYYY-MM-DD)")
     start_time: datetime.time = Field(..., description="Время начала первого слота (HH:MM:SS)")
-    hours: int = Field(default=1, ge=1, le=12, description="Количество бронируемых часовых слотов подряд")
+    hours: float = Field(default=1, ge=1, le=7, description="Продолжительность бронирования; шаг 15 минут")
     user_id: str = Field(..., min_length=1, max_length=64, description="Внешний идентификатор арендатора")
 
-
-class BookingConfirmRequest(BaseModel):
-    """Схема запроса на подтверждение массива часовых слотов и генерацию единого QR-кода."""
-
-    booking_ids: List[int] = Field(..., min_length=1, description="Список ID часовых слотов для подтверждения")
+    @model_validator(mode="after")
+    def validate_interval(self):
+        minutes = round(self.hours * 60)
+        start = self.start_time.hour * 60 + self.start_time.minute
+        if self.start_time.second or self.start_time.microsecond or start % 15:
+            raise ValueError("Время начала должно быть кратно 15 минутам.")
+        if abs(self.hours * 60 - minutes) > 1e-6 or minutes % 15:
+            raise ValueError("Продолжительность должна быть кратна 15 минутам.")
+        if start < 14 * 60 or start + minutes > 21 * 60:
+            raise ValueError("Бронирование должно находиться в интервале 14:00–21:00.")
+        return self
 
 
 class BookingStateUpdate(BaseModel):
@@ -68,11 +75,11 @@ class BookingResponse(BaseModel):
 
 
 class AvailableSlotInfo(BaseModel):
-    """Детализация отдельного свободного 1-часового слота с ценой."""
+    """Детализация свободного 15-минутного интервала с его стоимостью."""
 
     start_time: datetime.time
     end_time: datetime.time
-    price: Decimal = Field(..., description="Стоимость 1-часового слота в BYN")
+    price: Decimal = Field(..., description="Стоимость 15-минутного интервала в BYN")
 
 
 class AvailableRoomItem(BaseModel):
@@ -83,4 +90,11 @@ class AvailableRoomItem(BaseModel):
     room: str
     date: datetime.date
     price: Decimal = Field(..., description="Базовая стоимость 1 часа аренды помещения в BYN")
+    capacity: Optional[int] = None
+    address: Optional[str] = None
+    uo: Optional[str] = None
+    owner_id: Optional[str] = None
+    available_from: datetime.time = datetime.time(14, 0)
+    available_to: datetime.time = datetime.time(21, 0)
+    image_url: str = "/room-placeholder.svg"
     available_slots: List[AvailableSlotInfo]

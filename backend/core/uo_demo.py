@@ -1,0 +1,2 @@
+UO_DEMO_USER_ID = "UO-BSU-LYCEUM-DEMO"
+UO_DEMO_SCHOOL = "Лицей БГУ"

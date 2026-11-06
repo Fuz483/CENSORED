@@ -172,7 +172,7 @@ export function ManualBookingDialog({
               >
                 {ownListings.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.room} · {ROOM_TYPES[item.type].label} · {item.address}
+                    {t(item.room)} · {t(ROOM_TYPES[item.type].label)} · {item.address}
                   </option>
                 ))}
               </select>
@@ -181,11 +181,11 @@ export function ManualBookingDialog({
             {listing && (
               <div className="mt-4 flex items-center gap-3 border border-line bg-paper/45 p-2.5">
                 <div className="photo-frame aspect-[4/3] w-[72px] shrink-0">
-                  <img src={listing.image} alt={`${listing.room}, ${listing.school}`} />
+                  <img src={listing.image} alt={`${t(listing.room)}, ${t(listing.school)}`} />
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-[14px] font-medium">
-                    {listing.school} · {listing.room}
+                    {t(listing.school)} · {t(listing.room)}
                   </p>
                   <p className="mt-1 text-[13px] leading-relaxed text-ink-soft">
                     {listing.address} · до {listing.capacity} человек · {money(listing.price)} за час

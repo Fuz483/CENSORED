@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     BACKEND_PORT: int = 8000
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    JWT_SECRET_KEY: str = "dev-only-change-this-secret-before-deployment"
+    JWT_ACCESS_TOKEN_MINUTES: int = 60 * 24 * 7
+    UO_DEMO_ENABLED: bool = False
 
     @property
     def async_database_url(self) -> str:

@@ -84,12 +84,12 @@ export function ListingDetailsDialog({
       >
         <div className="flex items-start justify-between gap-4 px-5 py-4 sm:px-6">
           <div className="min-w-0">
-            <p className="text-[13px] text-ink-soft">{listing.school} · {listing.uo}</p>
+            <p className="text-[13px] text-ink-soft">{t(listing.school)} · {t(listing.uo)}</p>
             <h2
               id="listing-details-title"
               className="mt-1 text-[24px] leading-tight tracking-[-0.025em] sm:text-[28px]"
             >
-              {listing.room}
+              {t(listing.room)}
             </h2>
           </div>
           <button
@@ -106,7 +106,7 @@ export function ListingDetailsDialog({
         <div className="photo-frame aspect-[16/9] w-full bg-paper-2">
           <img
             src={listing.image}
-            alt={`${meta.label} «${listing.room}» в ${listing.school}`}
+            alt={`${t(meta.label)} «${t(listing.room)}» в ${t(listing.school)}`}
           />
         </div>
 
@@ -142,7 +142,7 @@ export function ListingDetailsDialog({
             </div>
             <div>
               <dt className="text-[13px] text-ink-mute">{t("Вместимость")}</dt>
-              <dd className="mt-1 text-[14px] font-medium">{t("До ")}{listing.capacity}{t(" человек")}</dd>
+              <dd className="mt-1 text-[14px] font-medium">{listing.capacity === null ? t("Не указана") : `${t("До ")}${listing.capacity}${t(" человек")}`}</dd>
             </div>
             <div className="col-span-2 sm:col-span-1">
               <dt className="text-[13px] text-ink-mute">{t("Учреждение")}</dt>

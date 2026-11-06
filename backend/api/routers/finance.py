@@ -16,6 +16,7 @@ BASE_HOURLY_RATES: Dict[RoomType, Decimal] = {
     RoomType.assembly_hall: Decimal("60.00"),
     RoomType.it_lab: Decimal("35.00"),
     RoomType.workshop: Decimal("30.00"),
+    RoomType.pool: Decimal("50.00"),
 }
 
 

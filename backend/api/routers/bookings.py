@@ -1,16 +1,20 @@
 import datetime
 import secrets
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, text
+import hashlib
 from sqlalchemy.ext.asyncio import AsyncSession
+from api.dependencies import get_current_tenant, get_current_user
+from core.config import settings
+from core.uo_demo import UO_DEMO_SCHOOL, UO_DEMO_USER_ID
 from api.routers.finance import get_room_hourly_price
 from db.database import get_db
-from db.models import Booking, User
+from db.models import Booking, RoomListing, RoomPhoto, User
 from schemas.booking import (
     AvailableRoomItem,
     AvailableSlotInfo,
-    BookingConfirmRequest,
     BookingCreate,
     BookingResponse,
     BookingState,
@@ -28,29 +32,26 @@ SCHOOL_ROOMS_CATALOG: List[Dict[str, str]] = [
     {"school": "ГУО «Средняя школа № 45 г. Минска»", "type_room": "sport_hall", "room": "Большой игровой зал"},
 ]
 
-STANDARD_TIME_SLOTS: List[datetime.time] = [
-    datetime.time(17, 0),
-    datetime.time(18, 0),
-    datetime.time(19, 0),
-    datetime.time(20, 0),
-    datetime.time(21, 0),
-]
+ROOM_CAPACITY: Dict[str, int] = {
+    "ГУО «Средняя школа № 1 г. Минска»|Спортзал № 1": 60,
+    "ГУО «Средняя школа № 1 г. Минска»|Актовый зал": 120,
+    "ГУО «Гимназия № 10 г. Минска»|Кабинет информатики 301": 18,
+    "ГУО «Гимназия № 10 г. Минска»|Слесарная мастерская 102": 30,
+    "ГУО «Средняя школа № 45 г. Минска»|Большой игровой зал": 60,
+}
+
+DEFAULT_ROOM_IMAGES: Dict[str, str] = {
+    "sport_hall": "https://images.pexels.com/photos/7201151/pexels-photo-7201151.jpeg?auto=compress&cs=tinysrgb&w=1200",
+    "assembly_hall": "https://images.pexels.com/photos/5506053/pexels-photo-5506053.jpeg?auto=compress&cs=tinysrgb&w=1200",
+    "it_lab": "https://images.pexels.com/photos/18471531/pexels-photo-18471531.jpeg?auto=compress&cs=tinysrgb&w=1200",
+    "workshop": "https://images.pexels.com/photos/36388551/pexels-photo-36388551.jpeg?auto=compress&cs=tinysrgb&w=1200",
+    "pool": "https://images.pexels.com/photos/7430320/pexels-photo-7430320.jpeg?auto=compress&cs=tinysrgb&w=1200",
+}
 
 
-def add_hours_to_time(base_time: datetime.time, hours_offset: int) -> datetime.time:
-    """Вычисление времени окончания слота со строгим контролем перехода через полночь."""
-    total_hours = base_time.hour + hours_offset
-    if total_hours > 23 or (total_hours == 23 and base_time.minute > 0):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Интервал бронирования выходит за пределы текущих суток (после 23:00).",
-        )
-    return datetime.time(total_hours, base_time.minute, base_time.second)
-
-
-def generate_unique_qr_code() -> str:
-    """Генерация криптографически стойкого идентификатора QR-пропуска."""
-    return f"QR-{secrets.token_hex(8).upper()}"
+def add_minutes(base_time: datetime.time, offset: int) -> datetime.time:
+    total = base_time.hour * 60 + base_time.minute + offset
+    return datetime.time(total // 60, total % 60)
 
 
 @router.get(
@@ -64,7 +65,7 @@ async def get_available_rooms(
     type_room: RoomType = Query(..., description="Тип помещения"),
     db: AsyncSession = Depends(get_db),
 ) -> List[AvailableRoomItem]:
-    """Формирование перечня доступных помещений, свободных 1-часовых слотов и стоимости в BYN."""
+    """Формирование перечня помещений и свободных четвертьчасовых интервалов."""
     stmt = select(Booking).where(
         and_(
             Booking.date == date,
@@ -80,50 +81,91 @@ async def get_available_rooms(
         .distinct()
     )
     db_rooms = (await db.execute(all_rooms_stmt)).all()
+    photo_rows = (await db.execute(select(RoomPhoto))).scalars().all()
+    room_photos = {
+        (photo.school, photo.type_room, photo.room): photo.image_url
+        for photo in photo_rows
+    }
+    listing_rows = (await db.execute(select(RoomListing).where(RoomListing.type_room == type_room.value))).scalars().all()
+    custom_listings = {
+        (listing.school, listing.type_room, listing.room): listing
+        for listing in listing_rows
+    }
 
     unique_rooms: Dict[Tuple[str, str], str] = {}
     for item in SCHOOL_ROOMS_CATALOG:
         if item["type_room"] == type_room.value:
             unique_rooms[(item["school"], item["room"])] = item["type_room"]
 
+    if settings.UO_DEMO_ENABLED:
+        demo_rooms = {RoomType.sport_hall: "Спортивный зал", RoomType.assembly_hall: "Актовый зал", RoomType.it_lab: "Кабинет информатики"}
+        if type_room in demo_rooms:
+            unique_rooms[(UO_DEMO_SCHOOL, demo_rooms[type_room])] = type_room.value
+
     for school_name, r_type, room_name in db_rooms:
         unique_rooms[(school_name, room_name)] = r_type
+    for listing in listing_rows:
+        unique_rooms[(listing.school, listing.room)] = listing.type_room
 
-    occupied_slots_by_room: Dict[str, set] = {}
+    occupied_by_room: Dict[Tuple[str, str], List[Tuple[datetime.time, datetime.time]]] = {}
     for b in active_bookings:
-        occupied_slots_by_room.setdefault(b.room, set()).add(b.start_time)
+        occupied_by_room.setdefault((b.school, b.room), []).append((b.start_time, b.end_time))
 
     slot_price = get_room_hourly_price(type_room)
     response_items: List[AvailableRoomItem] = []
 
     for (school_name, room_name), r_type in unique_rooms.items():
-        occupied = occupied_slots_by_room.get(room_name, set())
+        custom = custom_listings.get((school_name, r_type, room_name))
+        occupied = occupied_by_room.get((school_name, room_name), [])
         free_slots: List[AvailableSlotInfo] = []
 
-        for slot_start in STANDARD_TIME_SLOTS:
-            if slot_start not in occupied:
-                slot_end = datetime.time(slot_start.hour + 1, slot_start.minute)
+        for minute in range(14 * 60, 21 * 60, 15):
+            slot_start = datetime.time(minute // 60, minute % 60)
+            if custom is not None and not (custom.available_from <= slot_start < custom.available_to):
+                continue
+            slot_end = add_minutes(slot_start, 15)
+            if not any(start < slot_end and end > slot_start for start, end in occupied):
                 free_slots.append(
                     AvailableSlotInfo(
                         start_time=slot_start,
                         end_time=slot_end,
-                        price=slot_price,
+                        price=(custom.price if custom is not None else slot_price) / 4,
                     )
                 )
 
-        if free_slots:
-            response_items.append(
-                AvailableRoomItem(
-                    school=school_name,
-                    type_room=RoomType(r_type),
-                    room=room_name,
-                    date=date,
-                    price=slot_price,
-                    available_slots=free_slots,
-                )
+        response_items.append(
+            AvailableRoomItem(
+                school=school_name,
+                type_room=RoomType(r_type),
+                room=room_name,
+                date=date,
+                price=custom.price if custom is not None else slot_price,
+                capacity=custom.capacity if custom is not None else ROOM_CAPACITY.get(f"{school_name}|{room_name}"),
+                address=custom.address if custom is not None else None,
+                uo=custom.uo if custom is not None else None,
+                owner_id=custom.owner_id if custom is not None else None,
+                available_from=custom.available_from if custom is not None else datetime.time(14),
+                available_to=custom.available_to if custom is not None else datetime.time(21),
+                image_url=room_photos.get(
+                    (school_name, r_type, room_name),
+                    DEFAULT_ROOM_IMAGES.get(r_type, "/room-placeholder.svg"),
+                ),
+                available_slots=free_slots,
             )
+        )
 
     return response_items
+
+
+@router.get("/uo/bookings")
+async def uo_bookings(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not settings.UO_DEMO_ENABLED or current_user.role != "master" or current_user.user_id != UO_DEMO_USER_ID:
+        raise HTTPException(status_code=403, detail="Нет доступа к кабинету УО.")
+    rows = (await db.execute(select(Booking, User).join(User, Booking.user_id == User.user_id)
+        .where(Booking.school == UO_DEMO_SCHOOL).order_by(Booking.date, Booking.start_time))).all()
+    return [{**BookingResponse.model_validate(booking).model_dump(mode="json"),
+             "customer_name": tenant.name, "customer_phone": tenant.phone, "customer_id": tenant.id}
+            for booking, tenant in rows]
 
 
 @router.post(
@@ -134,35 +176,71 @@ async def get_available_rooms(
 )
 async def create_booking(
     payload: BookingCreate,
+    current_user: User = Depends(get_current_tenant),
     db: AsyncSession = Depends(get_db),
 ) -> List[Booking]:
     """
-    Генерация отдельных 1-часовых слотов в таблице booking_table на каждый час аренды.
-    Выполняет пакетную проверку коллизий и фиксирует стоимость (price) каждого слота в статусе 'pending'.
+    Создание подтвержденного бронирования с QR-пропуском после проверки коллизий.
     """
-    user_stmt = select(User).where(User.user_id == payload.user_id)
-    user = (await db.execute(user_stmt)).scalar_one_or_none()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Арендатор с user_id='{payload.user_id}' не зарегистрирован в системе.",
-        )
+    if payload.user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нельзя создать бронь для другого пользователя.")
 
-    # Расчет временных интервалов для каждого 1-часового слота
-    requested_intervals: List[Tuple[datetime.time, datetime.time]] = []
-    for hour_idx in range(payload.hours):
-        slot_start = add_hours_to_time(payload.start_time, hour_idx)
-        slot_end = add_hours_to_time(payload.start_time, hour_idx + 1)
-        requested_intervals.append((slot_start, slot_end))
+    if payload.date < datetime.date.today() or (
+        payload.date == datetime.date.today() and payload.start_time <= datetime.datetime.now().time()
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя забронировать прошедшее время.")
 
-    requested_start_times = [interval[0] for interval in requested_intervals]
+    # A transaction-scoped lock serializes overlap checks for the same room/day.
+    # The old unique constraint also blocked cancelled slots and different schools.
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        lock_key = int.from_bytes(hashlib.sha256(
+            f"{payload.school}|{payload.type_room.value}|{payload.room}|{payload.date}".encode()
+        ).digest()[:8], "big", signed=True)
+        await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
-    # Проверка коллизий сразу по всем запрашиваемым часовым слотам
+    known_room = any(
+        item["school"] == payload.school and item["type_room"] == payload.type_room.value and item["room"] == payload.room
+        for item in SCHOOL_ROOMS_CATALOG
+    )
+    known_room = known_room or (settings.UO_DEMO_ENABLED and payload.school == UO_DEMO_SCHOOL and
+        (payload.type_room.value, payload.room) in {
+            ("sport_hall", "Спортивный зал"), ("assembly_hall", "Актовый зал"), ("it_lab", "Кабинет информатики"),
+        })
+    if not known_room:
+        existing_room = (await db.execute(select(RoomListing.id).where(
+            RoomListing.school == payload.school,
+            RoomListing.type_room == payload.type_room.value,
+            RoomListing.room == payload.room,
+        ).limit(1))).scalar_one_or_none()
+        known_room = existing_room is not None
+    if not known_room:
+        existing_room = (await db.execute(select(Booking.id).where(
+            Booking.school == payload.school, Booking.type_room == payload.type_room.value, Booking.room == payload.room,
+        ).limit(1))).scalar_one_or_none()
+        if existing_room is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Помещение не найдено в каталоге.")
+
+    custom_listing = (await db.execute(select(RoomListing).where(
+        RoomListing.school == payload.school,
+        RoomListing.type_room == payload.type_room.value,
+        RoomListing.room == payload.room,
+    ))).scalar_one_or_none()
+    if custom_listing is not None:
+        if payload.start_time < custom_listing.available_from or slot_end > custom_listing.available_to:
+            raise HTTPException(status_code=400, detail="Выбранное время недоступно для этого помещения.")
+
+    duration_minutes = round(payload.hours * 60)
+    slot_start = payload.start_time
+    slot_end = add_minutes(slot_start, duration_minutes)
+
     collision_stmt = select(Booking).where(
         and_(
             Booking.room == payload.room,
+            Booking.school == payload.school,
+            Booking.type_room == payload.type_room.value,
             Booking.date == payload.date,
-            Booking.start_time.in_(requested_start_times),
+            Booking.start_time < slot_end,
+            Booking.end_time > slot_start,
             Booking.state != BookingState.cancelled.value,
         )
     )
@@ -172,84 +250,40 @@ async def create_booking(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Коллизия бронирования: помещение '{payload.room}' на дату {payload.date} "
-                f"в слоте {conflicting_booking.start_time}–{conflicting_booking.end_time} уже занято "
+                f"в интервале {conflicting_booking.start_time}–{conflicting_booking.end_time} уже занято "
                 f"(ID заявки: {conflicting_booking.id})."
             ),
         )
 
-    slot_price = get_room_hourly_price(payload.type_room)
-    created_slots: List[Booking] = []
-
-    for slot_start, slot_end in requested_intervals:
-        booking_slot = Booking(
-            school=payload.school,
-            type_room=payload.type_room.value,
-            room=payload.room,
-            date=payload.date,
-            start_time=slot_start,
-            end_time=slot_end,
-            price=slot_price,
-            state=BookingState.pending.value,
-            code=None,
-            user_id=payload.user_id,
-        )
-        db.add(booking_slot)
-        created_slots.append(booking_slot)
-
-    await db.commit()
-    for slot in created_slots:
-        await db.refresh(slot)
-
-    return created_slots
-
-
-@router.post(
-    "/bookings/confirm",
-    response_model=List[BookingResponse],
-    status_code=status.HTTP_200_OK,
-    summary="Подтверждение массива слотов и генерация единого QR-кода",
-)
-async def confirm_bookings(
-    payload: BookingConfirmRequest,
-    db: AsyncSession = Depends(get_db),
-) -> List[Booking]:
-    """
-    Принимает список ID слотов (booking_ids), генерирует единый уникальный code,
-    присваивает статус 'confirmed' и возвращает массив обновленных слотов.
-    """
-    unique_ids = list(dict.fromkeys(payload.booking_ids))
-    stmt = (
-        select(Booking)
-        .where(Booking.id.in_(unique_ids))
-        .order_by(Booking.date.asc(), Booking.start_time.asc())
+    hourly_price = custom_listing.price if custom_listing is not None else get_room_hourly_price(payload.type_room)
+    slot_price = (hourly_price * Decimal(duration_minutes) / Decimal(60)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
     )
-    bookings = list((await db.execute(stmt)).scalars().all())
+    # Issue an opaque, unguessable pass code as part of booking creation.
+    while True:
+        code = secrets.token_urlsafe(24)
+        existing = (await db.execute(select(Booking.id).where(Booking.code == code).limit(1))).scalar_one_or_none()
+        if existing is None:
+            break
 
-    if len(bookings) != len(unique_ids):
-        found_ids = {b.id for b in bookings}
-        missing_ids = [bid for bid in unique_ids if bid not in found_ids]
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Слоты бронирования со следующими ID не найдены: {missing_ids}.",
-        )
-
-    for b in bookings:
-        if b.state == BookingState.cancelled.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Слот ID={b.id} отменен и не может быть подтвержден.",
-            )
-
-    shared_qr_code = generate_unique_qr_code()
-    for b in bookings:
-        b.state = BookingState.confirmed.value
-        b.code = shared_qr_code
+    booking = Booking(
+        school=payload.school,
+        type_room=payload.type_room.value,
+        room=payload.room,
+        date=payload.date,
+        start_time=slot_start,
+        end_time=slot_end,
+        price=slot_price,
+        state=BookingState.confirmed.value,
+        code=code,
+        user_id=current_user.user_id,
+    )
+    db.add(booking)
 
     await db.commit()
-    for b in bookings:
-        await db.refresh(b)
+    await db.refresh(booking)
 
-    return bookings
+    return [booking]
 
 
 @router.get(
@@ -260,9 +294,12 @@ async def confirm_bookings(
 )
 async def get_user_bookings(
     user_id: str,
+    current_user: User = Depends(get_current_tenant),
     db: AsyncSession = Depends(get_db),
 ) -> List[Booking]:
     """Выборка всех почасовых слотов бронирования, принадлежащих указанному арендатору."""
+    if user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к бронированиям другого пользователя.")
     stmt = (
         select(Booking)
         .where(Booking.user_id == user_id)
@@ -281,11 +318,12 @@ async def get_user_bookings(
 async def update_booking_state(
     id: int,
     payload: BookingStateUpdate,
+    current_user: User = Depends(get_current_tenant),
     db: AsyncSession = Depends(get_db),
 ) -> Booking:
     """
     Изменение состояния слота бронирования.
-    При переходе в статус 'confirmed' или 'paid' автоматически генерируется code, если он отсутствовал.
+    Через этот endpoint разрешена только отмена; подтверждение выполняется при создании.
     """
     stmt = select(Booking).where(Booking.id == id)
     booking = (await db.execute(stmt)).scalar_one_or_none()
@@ -296,9 +334,17 @@ async def update_booking_state(
             detail=f"Бронирование с идентификатором id={id} не найдено.",
         )
 
+    if booking.user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к этому бронированию.")
+    if payload.state != BookingState.cancelled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Через этот endpoint доступна только отмена бронирования.")
+    if booking.state == BookingState.cancelled.value:
+        return booking
+    start_at = datetime.datetime.combine(booking.date, booking.start_time)
+    if (start_at - datetime.datetime.now()).total_seconds() < 2 * 60 * 60:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Отменить бронирование можно не позднее чем за 2 часа до начала.")
+
     booking.state = payload.state.value
-    if payload.state in (BookingState.confirmed, BookingState.paid) and not booking.code:
-        booking.code = generate_unique_qr_code()
 
     await db.commit()
     await db.refresh(booking)

@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, X } from "lucide-react";
 
 import { ROOM_TYPES } from "../lib/data";
-import { durationLabel, intervalHours, intervalLabel, intervalPrice, longDate, money, plural, roundMoney } from "../lib/format";
+import { durationLabel, intervalHours, intervalLabel, longDate, plural } from "../lib/format";
 import type { Booking, BookingRequest, Listing } from "../lib/types";
-import { errorMessage } from "../lib/repository";
+import { PartialBookingError, errorMessage } from "../lib/repository";
 import { useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
+import { PassQr } from "./PassQr";
 
 interface BookingModalProps {
   requests: BookingRequest[];
@@ -19,29 +20,50 @@ interface Group {
   request: BookingRequest;
 }
 
-type Step = "confirm" | "processing" | "done";
+type Step = "processing" | "done" | "error";
 
 export function BookingModal({ requests, onClose, onGoToBookings }: BookingModalProps) {
   const { listings, bookSlots } = useApp();
   const { t, language } = useLanguage();
-  const [step, setStep] = useState<Step>("confirm");
+  const [step, setStep] = useState<Step>("processing");
   const [created, setCreated] = useState<Booking[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const submitted = useRef(false);
 
   const groups = useMemo<Group[]>(() => requests.flatMap((request) => {
     const listing = listings.find((item) => item.id === request.listingId);
     return listing ? [{ listing, request }] : [];
   }), [listings, requests]);
 
-  const estimate = groups.reduce(
-    (sum, group) => sum + intervalPrice(group.listing.price, group.request.startTime, group.request.endTime), 0,
-  );
   const hours = groups.reduce(
     (sum, group) => sum + intervalHours(group.request.startTime, group.request.endTime), 0,
   );
-  const total = roundMoney(created.length ? created.reduce((sum, booking) => sum + booking.total, 0) : estimate);
+  const createdHours = created.reduce((sum, booking) => sum + intervalHours(booking.startTime, booking.endTime), 0);
   const date = groups[0]?.request.date ?? "";
   const cover = groups[0]?.listing;
+
+  const submit = async () => {
+    setStep("processing");
+    setError(null);
+    try {
+      const bookings = await bookSlots(requests);
+      setCreated(bookings);
+      setStep("done");
+    } catch (caught) {
+      setError(t(errorMessage(caught, "Не удалось оформить бронь. Обновите каталог и попробуйте ещё раз.")));
+      if (caught instanceof PartialBookingError) {
+        setCreated(caught.created);
+        setStep("done");
+      } else setStep("error");
+    }
+  };
+
+  useEffect(() => {
+    // The ref prevents React Strict Mode's effect replay from submitting twice.
+    if (submitted.current) return;
+    submitted.current = true;
+    void submit();
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -55,19 +77,6 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
       document.body.style.overflow = previous;
     };
   }, [onClose, step]);
-
-  const confirm = async () => {
-    setStep("processing");
-    setError(null);
-    try {
-      const bookings = await bookSlots(requests);
-      setCreated(bookings);
-      setStep("done");
-    } catch (caught) {
-      setError(t(errorMessage(caught, "Не удалось оформить бронь. Обновите каталог и попробуйте ещё раз.")));
-      setStep("confirm");
-    }
-  };
 
   const close = () => {
     if (step === "processing") return;
@@ -93,7 +102,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
               id="booking-title"
               className="text-[22px] leading-tight tracking-[-0.025em]"
             >
-              {step === "done" ? t("Бронь оформлена") : t("Проверьте детали")}
+              {step === "done" ? t("Бронь оформлена") : step === "error" ? t("Не удалось оформить бронь") : t("Оформляем бронь")}
             </h2>
           </div>
           <button
@@ -114,21 +123,24 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
               <div className="photo-frame mb-5 aspect-[16/7]">
                 <img
                   src={cover.image}
-                  alt={`${ROOM_TYPES[cover.type].label} «${cover.room}»`}
+                  alt={`${t(ROOM_TYPES[cover.type].label)} «${t(cover.room)}»`}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-navy/80 to-transparent" />
                 <p className="absolute bottom-3 left-4 font-serif text-[17px] text-paper">
-                  {cover.school} · {cover.room}
+                  {t(cover.school)} · {t(cover.room)}
                 </p>
               </div>
             )}
 
-            <p className="text-[14px] text-ink-soft">{longDate(date, language)} · {t("оплачено")}</p>
-            <p className="mt-2 font-serif text-[32px] leading-none font-medium tabular-nums">
-              {money(total)}
-            </p>
+            {error && <p role="alert" className="mb-3 text-[13px] text-orange">{error}</p>}
+            <p className="text-[14px] text-ink-soft">{longDate(date, language)} · {t("Бронь подтверждена")}</p>
+            {created.some((booking) => booking.state === "confirmed" && booking.code) ? (
+              <p className="mt-2 font-serif text-[24px] leading-none font-medium">{t("QR-пропуск готов")}</p>
+            ) : (
+              <p role="alert" className="mt-2 text-[13px] text-orange">{t("Сервер не вернул QR-код для брони.")}</p>
+            )}
             <p className="mt-3 text-[14px] text-ink-soft">
-              {durationLabel(hours, language)} · {t("бронь закреплена за вашим номером")}
+              {durationLabel(createdHours, language)} · {t("бронь закреплена за вашим номером")}
             </p>
             <p className="mt-2 text-[13px] text-ink-soft">
               {created.length === 1
@@ -144,7 +156,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
                       <img src={booking.listing.image} alt="" />
                     </div>
                     <span className="min-w-0 flex-1 truncate text-[13px]">
-                      {booking.listing.school} · {booking.listing.room}
+                      {t(booking.listing.school)} · {t(booking.listing.room)}
                     </span>
                     <span className="font-mono text-[12px] text-ink-soft">
                       №{booking.id}
@@ -154,9 +166,12 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
               </ul>
             )}
 
-            <p className="mt-5 border-t border-line pt-4 text-[13px] leading-relaxed text-ink-soft">
-              {t("Оплата демонстрационная — деньги не списываются. Ключ и пропуск выдаёт администратор школы на вахте по номеру брони.")}
-            </p>
+            {created.filter((booking) => booking.state === "confirmed" && booking.code).map((booking) => (
+              <div key={booking.id} className="mt-4 border-t border-line pt-4">
+                <p className="inline-flex items-center gap-2 text-[13px] font-semibold text-ok"><Check className="size-4" />{t("Пропуск готов")}</p>
+                <PassQr code={booking.code!} />
+              </div>
+            ))}
 
             <div className="mt-6 flex gap-2">
               <button type="button" onClick={onGoToBookings} className="btn btn-primary flex-1">
@@ -173,7 +188,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
               <div className="photo-frame aspect-[16/7]">
                 <img
                   src={cover.image}
-                  alt={`${ROOM_TYPES[cover.type].label} «${cover.room}»`}
+                  alt={`${t(ROOM_TYPES[cover.type].label)} «${t(cover.room)}»`}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-navy/85 via-navy/15 to-transparent" />
                 <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-4 text-paper sm:p-5">
@@ -182,7 +197,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
                       {longDate(date, language)}
                     </p>
                     <p className="mt-1 font-serif text-[20px] leading-tight">
-                      {cover.school} · {cover.room}
+                      {t(cover.school)} · {t(cover.room)}
                     </p>
                   </div>
                   <p className="shrink-0 font-mono text-[12px] text-paper/85">
@@ -204,7 +219,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
                     <div className="photo-frame aspect-square w-[58px] shrink-0 sm:w-[68px]">
                       <img
                         src={group.listing.image}
-                        alt={`${ROOM_TYPES[group.listing.type].label} «${group.listing.room}»`}
+                        alt={`${t(ROOM_TYPES[group.listing.type].label)} «${t(group.listing.room)}»`}
                       />
                       <span className="absolute top-0 left-0 bg-paper px-1 py-0.5 font-mono text-[11px]">
                         {String(index + 1).padStart(2, "0")}
@@ -213,14 +228,12 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-4">
                         <p className="min-w-0 truncate text-[14px] font-medium">
-                          {group.listing.room}
+                          {t(group.listing.room)}
                         </p>
-                        <p className="shrink-0 text-[13px] tabular-nums">
-                          {money(intervalPrice(group.listing.price, group.request.startTime, group.request.endTime))}
-                        </p>
+                  <p className="shrink-0 text-[11px] text-ink-mute">{t("Бесплатно")}</p>
                       </div>
                       <p className="mt-0.5 line-clamp-2 text-[13px] text-ink-soft">
-                        {group.listing.address} · {group.listing.school} · {ROOM_TYPES[group.listing.type].label}
+                        {group.listing.address} · {t(group.listing.school)} · {t(ROOM_TYPES[group.listing.type].label)}
                       </p>
                       <p className="mt-2 font-mono text-[13px] tabular-nums text-ink-soft">
                         {intervalLabel(group.request.startTime, group.request.endTime)}
@@ -234,33 +247,25 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
             <div className="mt-auto border-t border-ink/15 px-5 py-5 sm:px-6">
               <div className="flex items-baseline justify-between gap-4">
                 <span className="text-[15px] font-medium text-ink-soft">
-                  {t("Итого")} · {durationLabel(hours, language)}
-                </span>
-                <span className="font-serif text-[24px] font-medium tabular-nums">
-                  {money(total)}
+                  {durationLabel(hours, language)} · {t("Бесплатно")}
                 </span>
               </div>
 
-              <button
-                type="button"
-                onClick={confirm}
-                disabled={step === "processing"}
-                className="btn btn-primary mt-4 h-12 w-full"
-              >
-                {step === "processing" ? (
-                  <>
-                    <span className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    {t("Оформляем…")}
-                  </>
-                ) : (
-                  <>{t("Оплатить")} {money(total)}</>
-                )}
-              </button>
+              {step === "processing" ? (
+                <div className="mt-4 flex min-h-12 items-center justify-center gap-2 text-[14px] text-ink-soft" role="status">
+                  <span className="size-4 animate-spin rounded-full border-2 border-ink/20 border-t-ink" />
+                  {t("Отправляем запрос на бронирование…")}
+                </div>
+              ) : (
+                <button type="button" onClick={() => void submit()} className="btn btn-primary mt-4 h-12 w-full">
+                  {t("Повторить запрос")}
+                </button>
+              )}
 
               {error && <p role="alert" className="mt-3 text-[12px] text-orange">{error}</p>}
 
               <p className="mt-3 text-center text-[13px] text-ink-soft">
-                {t("Демо-оплата. Реальные деньги не списываются.")}
+                {t("Бронь бесплатная — QR-пропуск выдаётся сразу.")}
               </p>
             </div>
           </>

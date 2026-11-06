@@ -1,3 +1,4 @@
+// @refresh reset
 import {
   createContext,
   useCallback,
@@ -8,11 +9,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { DemoRepository } from "../lib/demoRepository";
-import { RepositoryError, type AppRepository, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput } from "../lib/repository";
-import type { Booking, BookingRequest, Listing, Slot, User } from "../lib/types";
+import { RestRepository } from "../lib/restRepository";
+import { PartialBookingError, RepositoryError, errorMessage, type AppRepository, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput } from "../lib/repository";
+import type { Booking, BookingRequest, GuardScanResult, Listing, Slot, User } from "../lib/types";
 import { timeToMinutes } from "../lib/intervals";
-import { readLocalSession, saveLocalSession } from "../lib/auth";
 
 interface AppContextValue {
   user: User | null;
@@ -20,15 +20,19 @@ interface AppContextValue {
   slots: Slot[];
   bookings: Booking[];
   ready: boolean;
+  loadError: string | null;
+  reload: () => Promise<void>;
   login: (input: LoginInput) => Promise<string | null>;
   register: (input: RegisterInput) => Promise<string | null>;
   updateProfile: (input: ProfileInput) => Promise<string | null>;
   logout: () => void;
   bookSlots: (requests: BookingRequest[]) => Promise<Booking[]>;
+  scanQr: (code: string) => Promise<GuardScanResult>;
   cancelBooking: (bookingId: number) => Promise<void>;
   addListing: (input: NewListingInput) => Promise<Listing>;
   updateListing: (listingId: number, input: NewListingInput) => Promise<Listing>;
   deleteListing: (listingId: number) => Promise<void>;
+  uploadRoomPhoto: (listing: Listing, file: File) => Promise<void>;
   createManualBooking: (input: ManualBookingInput) => Promise<Booking>;
 }
 
@@ -41,64 +45,83 @@ export function AppProvider({
   children: ReactNode;
   repository?: AppRepository;
 }) {
-  const [repo] = useState(() => repository ?? new DemoRepository());
-  const [user, setUser] = useState<User | null>(() => readLocalSession());
+  const [repo] = useState(() => repository ?? new RestRepository());
+  const [user, setUser] = useState<User | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async (forUser?: User) => {
     const snapshot = await repo.load(forUser);
     setListings(snapshot.listings);
     setSlots(snapshot.slots);
     setBookings(snapshot.bookings);
+    setLoadError(null);
   }, [repo]);
 
   useEffect(() => {
     let active = true;
-    const initialUser = readLocalSession();
-    repo.load(initialUser ?? undefined).then((snapshot) => {
+    (async () => {
+      const initialUser = await repo.restoreSession?.() ?? null;
+      if (active) setUser(initialUser);
+      return repo.load(initialUser ?? undefined);
+    })().then((snapshot) => {
       if (!active) return;
       setListings(snapshot.listings);
       setSlots(snapshot.slots);
       setBookings(snapshot.bookings);
       setReady(true);
-    }).catch(() => {
-      if (active) setReady(true);
+    }).catch((error) => {
+      if (active) {
+        setLoadError(errorMessage(error, "Не удалось загрузить данные."));
+        setReady(true);
+      }
     });
     return () => { active = false; };
   }, [repo]);
 
+  const reload = useCallback(async () => {
+    try {
+      const restored = user ?? await repo.restoreSession?.() ?? null;
+      setUser(restored);
+      await refresh(restored ?? undefined);
+    }
+    catch (error) { setLoadError(errorMessage(error, "Не удалось загрузить данные.")); }
+  }, [refresh, repo, user]);
+
+  const refreshAfterMutation = useCallback(async (forUser: User) => {
+    try { await refresh(forUser); }
+    catch (error) { setLoadError(errorMessage(error, "Не удалось обновить данные.")); }
+  }, [refresh]);
+
   const login = useCallback(async (input: LoginInput) => {
     try {
       const nextUser = await repo.login(input);
-      await refresh(nextUser);
-      saveLocalSession(nextUser);
       setUser(nextUser);
+      await refreshAfterMutation(nextUser);
       return null;
     } catch (error) {
       return error instanceof RepositoryError ? error.message : "Не удалось войти. Попробуйте ещё раз.";
     }
-  }, [refresh, repo]);
+  }, [refreshAfterMutation, repo]);
 
   const register = useCallback(async (input: RegisterInput) => {
     try {
       const nextUser = await repo.register(input);
-      await refresh(nextUser);
-      saveLocalSession(nextUser);
       setUser(nextUser);
+      await refreshAfterMutation(nextUser);
       return null;
     } catch (error) {
       return error instanceof RepositoryError ? error.message : "Не удалось создать аккаунт. Проверьте данные и повторите попытку.";
     }
-  }, [refresh, repo]);
+  }, [refreshAfterMutation, repo]);
 
   const updateProfile = useCallback(async (input: ProfileInput) => {
     if (!user) return "Войдите, чтобы изменить профиль.";
     try {
       const updated = await repo.updateProfile(user, input);
-      saveLocalSession(updated);
       setUser(updated);
       return null;
     } catch (error) {
@@ -107,22 +130,33 @@ export function AppProvider({
   }, [repo, user]);
 
   const logout = useCallback(() => {
-    saveLocalSession(null);
+    repo.logout?.();
     setUser(null);
-  }, []);
+    setBookings([]);
+  }, [repo]);
 
   const bookSlots = useCallback(async (requests: BookingRequest[]) => {
     if (!user) throw new RepositoryError("Войдите, чтобы забронировать часы.");
-    const created = await repo.bookSlots(user, requests);
-    await refresh(user);
-    return created;
-  }, [refresh, repo, user]);
+    try {
+      const created = await repo.bookSlots(user, requests);
+      setBookings((current) => [...created, ...current.filter((item) => !created.some((booking) => booking.id === item.id))]);
+      await refreshAfterMutation(user);
+      return created;
+    } catch (error) {
+      if (error instanceof PartialBookingError) setBookings((current) => [...error.created, ...current]);
+      await refreshAfterMutation(user);
+      throw error;
+    }
+  }, [refreshAfterMutation, repo, user]);
+
+  const scanQr = useCallback((code: string) => repo.scanQr(code), [repo]);
 
   const cancelBooking = useCallback(async (bookingId: number) => {
     if (!user) throw new RepositoryError("Войдите, чтобы отменить бронирование.");
     await repo.cancelBooking(user, bookingId);
-    await refresh(user);
-  }, [refresh, repo, user]);
+    setBookings((current) => current.map((booking) => booking.id === bookingId ? { ...booking, state: "cancelled" } : booking));
+    await refreshAfterMutation(user);
+  }, [refreshAfterMutation, repo, user]);
 
   const addListing = useCallback(async (input: NewListingInput) => {
     if (!user) throw new RepositoryError("Войдите, чтобы добавить пространство.");
@@ -144,6 +178,12 @@ export function AppProvider({
     await refresh(user);
   }, [refresh, repo, user]);
 
+  const uploadRoomPhoto = useCallback(async (listing: Listing, file: File) => {
+    if (!user) throw new RepositoryError("Войдите, чтобы изменить фото.");
+    await repo.uploadRoomPhoto(user, listing, file);
+    await refresh(user);
+  }, [refresh, repo, user]);
+
   const createManualBooking = useCallback(async (input: ManualBookingInput) => {
     if (!user) throw new RepositoryError("Войдите, чтобы создать бронь.");
     const booking = await repo.createManualBooking(user, input);
@@ -152,8 +192,8 @@ export function AppProvider({
   }, [refresh, repo, user]);
 
   const value = useMemo(() => ({
-    user, listings, slots, bookings, ready, login, register, updateProfile, logout, bookSlots, cancelBooking, addListing, updateListing, deleteListing, createManualBooking,
-  }), [user, listings, slots, bookings, ready, login, register, updateProfile, logout, bookSlots, cancelBooking, addListing, updateListing, deleteListing, createManualBooking]);
+    user, listings, slots, bookings, ready, loadError, reload, login, register, updateProfile, logout, bookSlots, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking,
+  }), [user, listings, slots, bookings, ready, loadError, reload, login, register, updateProfile, logout, bookSlots, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { CalendarPlus, Pencil, Plus, Trash2 } from "lucide-react";
+import { useRef, useState, type ChangeEvent } from "react";
+import { CalendarPlus, ImagePlus, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { ROOM_TYPES, toISODate } from "../lib/data";
 import {
@@ -20,9 +20,11 @@ import { useLanguage } from "../lib/i18n";
 
 type Tab = "spaces" | "bookings";
 type BookingFilter = "all" | BookingSource;
+// Creation and photo changes are supported; other management actions remain read-only.
+const READ_ONLY = true;
 
 export function UoDashboard() {
-  const { user, listings, slots, bookings, deleteListing } = useApp();
+  const { user, listings, slots, bookings, deleteListing, uploadRoomPhoto, reload } = useApp();
   const { t } = useLanguage();
   const [tab, setTab] = useState<Tab>("spaces");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
@@ -30,6 +32,24 @@ export function UoDashboard() {
   const [editingListing, setEditingListing] = useState<Listing | undefined>();
   const [manualOpen, setManualOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const changePhoto = async (listing: Listing, file: File) => {
+    if (!file.type.match(/^image\/(jpeg|png|webp)$/)) {
+      setNotice("Поддерживаются фотографии JPG, PNG и WebP.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setNotice("Размер фотографии не должен превышать 8 МБ.");
+      return;
+    }
+    try {
+      await uploadRoomPhoto(listing, file);
+      setNotice(`Фото помещения «${listing.room}» обновлено.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Не удалось обновить фото.");
+    }
+  };
 
   if (!user) return null;
 
@@ -43,8 +63,9 @@ export function UoDashboard() {
     );
   const clientBookings = ownBookings.filter((booking) => booking.source === "client");
   const manualBookings = ownBookings.filter((booking) => booking.source === "uo");
-  const totalHours = ownBookings.reduce((sum, booking) => sum + intervalHours(booking.startTime, booking.endTime), 0);
-  const totalRevenue = ownBookings.reduce((sum, booking) => sum + booking.total, 0);
+  const activeBookings = ownBookings.filter((booking) => booking.state !== "cancelled");
+  const totalHours = activeBookings.reduce((sum, booking) => sum + intervalHours(booking.startTime, booking.endTime), 0);
+  const totalRevenue = activeBookings.reduce((sum, booking) => sum + booking.total, 0);
   const today = toISODate(new Date());
 
   const visibleBookings = ownBookings.filter(
@@ -91,12 +112,11 @@ export function UoDashboard() {
         <div className="mt-4 grid gap-6 md:grid-cols-[minmax(0,1fr)_240px] md:items-end lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-12">
           <div>
             <h1 className="max-w-[15ch] text-[clamp(2.1rem,4.6vw,3.6rem)] leading-[0.98] tracking-[-0.045em]">
-              {t("Сдавайте то, ")}
-              <span className="text-blue italic">{t("что уже есть")}</span>
-              <span className="text-orange">.</span>
+              {t("Лицей БГУ")}
+              <span className="block text-blue italic">{t("Кабинет УО")}<span className="text-orange">.</span></span>
             </h1>
             <p className="mt-4 max-w-[52ch] text-[15px] leading-relaxed text-ink-soft">
-              {t("Добавьте фото и адрес помещения — оно появится в каталоге клиентов.")}
+              {t("Помещения, свободные часы и заявки арендаторов вашего учреждения.")}
             </p>
           </div>
 
@@ -152,6 +172,7 @@ export function UoDashboard() {
           </TabButton>
         </div>
 
+        <button type="button" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await reload(); } finally { setRefreshing(false); } }} className="btn btn-quiet mb-3 h-11">{t(refreshing ? "Подождите…" : "Обновить данные")}</button>
         {tab === "spaces" ? (
           <button
             type="button"
@@ -161,7 +182,7 @@ export function UoDashboard() {
             <Plus className="size-4" strokeWidth={1.8} />
             {t("Добавить пространство")}
           </button>
-        ) : (
+        ) : !READ_ONLY ? (
           <button
             type="button"
             onClick={() => setManualOpen(true)}
@@ -170,7 +191,7 @@ export function UoDashboard() {
             <CalendarPlus className="size-4" strokeWidth={1.8} />
             {t("Новая бронь")}
           </button>
-        )}
+        ) : null}
       </div>
 
       {notice && (
@@ -190,6 +211,7 @@ export function UoDashboard() {
           onAdd={() => { setEditingListing(undefined); setSpaceOpen(true); }}
           onEdit={(listing) => { setEditingListing(listing); setSpaceOpen(true); }}
           onDelete={(listing) => void removeSpace(listing)}
+          onChangePhoto={changePhoto}
         />
       ) : (
         <BookingsTab
@@ -277,6 +299,7 @@ function SpacesTab({
   onAdd,
   onEdit,
   onDelete,
+  onChangePhoto,
 }: {
   listings: ReturnType<typeof useApp>["listings"];
   slots: ReturnType<typeof useApp>["slots"];
@@ -284,6 +307,7 @@ function SpacesTab({
   onAdd: () => void;
   onEdit: (listing: Listing) => void;
   onDelete: (listing: Listing) => void;
+  onChangePhoto: (listing: Listing, file: File) => void;
 }) {
   const { t } = useLanguage();
   if (listings.length === 0) {
@@ -328,22 +352,26 @@ function SpacesTab({
               <div className="photo-frame aspect-[4/3] w-full">
                 <img
                   src={listing.image}
-                  alt={`${ROOM_TYPES[listing.type].label} «${listing.room}»`}
+                  alt={`${t(ROOM_TYPES[listing.type].label)} «${t(listing.room)}»`}
                   loading="lazy"
                 />
                 <span className="index-tag">{String(index + 1).padStart(2, "0")}</span>
               </div>
 
+              <div className="col-span-2 -mt-2 sm:col-span-1 sm:col-start-1">
+                <RoomPhotoButton listing={listing} onSelect={onChangePhoto} />
+              </div>
+
               <div className="min-w-0 self-center">
                 <p className="truncate text-[12px] text-ink-soft">{t(listing.school)} · {t(listing.uo)}</p>
                 <h2 className="mt-1 truncate text-[20px] leading-tight tracking-[-0.025em] sm:text-[23px]">
-                  {listing.room}
+                  {t(listing.room)}
                 </h2>
                 <p className="mt-1.5 text-[13px] leading-snug text-ink-soft">
                   {listing.address}
                 </p>
                 <p className="mt-1 text-[12px] leading-snug text-ink-mute">
-                  {t(ROOM_TYPES[listing.type].label)} · {t("до ")}{listing.capacity} {t("человек")}
+                  {t(ROOM_TYPES[listing.type].label)} · {listing.capacity === null ? t("Вместимость не указана") : `${t("до ")}${listing.capacity} ${t("человек")}`}
                 </p>
               </div>
 
@@ -368,7 +396,7 @@ function SpacesTab({
                 </div>
               </div>
 
-              <div className="col-span-2 flex items-center justify-end gap-2 sm:col-start-2 sm:col-span-2 lg:col-start-2">
+              {!READ_ONLY && <div className="col-span-2 flex items-center justify-end gap-2 sm:col-start-2 sm:col-span-2 lg:col-start-2">
                 <button
                   type="button"
                   onClick={() => onEdit(listing)}
@@ -388,7 +416,7 @@ function SpacesTab({
                   <Trash2 className="size-3.5" aria-hidden="true" />{t("Удалить")}
                 </button>
                 {hasActiveBookings && <span className="text-[10px] text-ink-mute">{t("Есть активные брони")}</span>}
-              </div>
+              </div>}
             </article>
           );
         })}
@@ -396,13 +424,38 @@ function SpacesTab({
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-[52ch] text-[13px] leading-relaxed text-ink-soft">
-          {t("Свободные часы обновляются по расписанию; новое помещение сразу получает доступные слоты на неделю.")}
+          {t("Свободные часы и брони загружаются с сервера. Обновите данные, чтобы увидеть новые заявки.")}
         </p>
         <button type="button" onClick={onAdd} className="archive-link text-[12px] font-medium">
           {t("Добавить ещё")}
         </button>
       </div>
     </div>
+  );
+}
+
+function RoomPhotoButton({ listing, onSelect }: { listing: Listing; onSelect: (listing: Listing, file: File) => void }) {
+  const { t } = useLanguage();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setUploading(true);
+    try { await onSelect(listing, file); }
+    finally { setUploading(false); }
+  };
+
+  return (
+    <>
+      <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => void handleFile(event)} />
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} className="btn btn-quiet h-8 px-2.5 text-[11px] disabled:opacity-50">
+        {uploading ? <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" /> : <ImagePlus className="size-3.5" aria-hidden="true" />}
+        {t(uploading ? "Загружаем…" : "Сменить фото")}
+      </button>
+    </>
   );
 }
 
@@ -434,7 +487,7 @@ function BookingsTab({
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line py-3">
         <div className="flex flex-wrap gap-1">
-          {tabs.map((item) => {
+          {tabs.filter((item) => !READ_ONLY || item.value !== "uo").map((item) => {
             const active = filter === item.value;
             return (
               <button
@@ -466,13 +519,13 @@ function BookingsTab({
           <h2 className="text-[22px] tracking-[-0.02em]">{t("Здесь пока тихо")}</h2>
           <p className="mt-2 max-w-[44ch] text-[13px] leading-relaxed text-ink-mute">
             {allCount === 0
-              ? t("Брони появятся здесь, когда клиенты выберут ваши пространства. Можно добавить заявку вручную.")
+              ? t("Брони появятся здесь, когда арендаторы выберут помещения Лицея БГУ.")
               : t("В этой выборке нет броней. Покажите все или создайте ручную заявку.")}
           </p>
-          <button type="button" onClick={onCreate} className="btn btn-primary mt-5 h-10">
+          {!READ_ONLY && <button type="button" onClick={onCreate} className="btn btn-primary mt-5 h-10">
             <CalendarPlus className="size-4" strokeWidth={1.8} />
             {t("Создать бронь")}
-          </button>
+          </button>}
         </div>
       ) : (
         <div>
@@ -498,7 +551,7 @@ function BookingsTab({
               <div className="photo-frame aspect-[4/3] w-full">
                 <img
                   src={booking.listing.image}
-                  alt={`${ROOM_TYPES[booking.listing.type].label} «${booking.listing.room}»`}
+                  alt={`${t(ROOM_TYPES[booking.listing.type].label)} «${t(booking.listing.room)}»`}
                   loading="lazy"
                 />
               </div>
@@ -517,9 +570,10 @@ function BookingsTab({
                   <span className="font-mono text-[10px] text-ink-mute">
                     №{booking.id}
                   </span>
+                  <span className="text-[11px] text-ink-soft">{t(({ pending: "Бронь создана", confirmed: "Подтверждено", paid: "Оплачено", active: "Активно", completed: "Завершено", cancelled: "Отменено" })[booking.state ?? "pending"])}</span>
                 </div>
                 <h2 className="mt-1 truncate text-[19px] leading-tight tracking-[-0.02em] sm:text-[21px]">
-                  {booking.listing.room}
+                  {t(booking.listing.room)}
                 </h2>
                 <p className="mt-1 truncate text-[11.5px] text-ink-mute">
                   {t(booking.listing.school)} · {t(ROOM_TYPES[booking.listing.type].label)}

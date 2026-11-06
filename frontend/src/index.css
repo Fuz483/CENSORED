@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Explicit source avoids gitignore/CWD-dependent utility discovery. */
+@source "./";
 
 @theme {
   --font-serif: "Manrope", ui-sans-serif, system-ui, sans-serif;

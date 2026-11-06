@@ -1,56 +1,45 @@
 import { useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Eye, EyeOff } from "lucide-react";
+import { ArrowUpRight, Eye, EyeOff, ScanLine } from "lucide-react";
 
-import { DEMO_PASSWORD, demoPhone } from "../lib/auth";
-import { LISTINGS, ROOM_TYPES, ROOM_TYPE_LIST, SPACE_SHOWCASE, toISODate } from "../lib/data";
+import { ROOM_TYPES, ROOM_TYPE_LIST, toISODate } from "../lib/data";
 import { money } from "../lib/format";
-import { ROLE_CAPTION, ROLE_LABEL } from "../lib/roles";
-import type { Role } from "../lib/types";
 import { freeHourCount, useApp } from "../state/AppState";
 import { Logo } from "./Logo";
 import { WeekAvailability } from "./WeekAvailability";
 import { LanguageToggle, useLanguage } from "../lib/i18n";
 
-const ROLE_CTA: Record<Role, string> = {
-  tenant: "Войти как клиент",
-  master: "Войти как УО",
-};
-
-const HERO_SPACES = ROOM_TYPE_LIST.flatMap((type) => {
-  const listing = LISTINGS.find((item) => item.type === type);
-  return listing ? [listing] : [];
-});
-
 export function LoginPage() {
-  const { login, register, slots } = useApp();
+  const { login, register, slots, listings, loadError } = useApp();
   const { t } = useLanguage();
-  const [role, setRole] = useState<Role>("tenant");
+  const HERO_SPACES = ROOM_TYPE_LIST.flatMap((type) => {
+    const listing = listings.find((item) => item.type === type);
+    return listing ? [listing] : [];
+  });
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [role, setRole] = useState<"tenant" | "master">("tenant");
   const [surname, setSurname] = useState("");
   const [firstName, setFirstName] = useState("");
   const [patronymic, setPatronymic] = useState("");
-  const [phone, setPhone] = useState(() => demoPhone("tenant"));
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [heroSpace, setHeroSpace] = useState(0);
   const touchStartX = useRef<number | null>(null);
   const swipedPhoto = useRef<{ x: number; y: number; at: number } | null>(null);
 
   const freeToday = freeHourCount(slots, toISODate(new Date()));
 
-  const switchRole = (next: Role) => {
-    setRole(next);
-    setAuthMode("login");
-    setPhone(demoPhone(next));
-    setError(null);
-  };
-
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setError(authMode === "register"
-      ? await register({ surname, firstName, patronymic, phone, password })
-      : await login({ role, phone, password }));
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      setError(role === "tenant" && authMode === "register"
+        ? await register({ surname, firstName, patronymic, phone, password })
+        : await login({ role, phone, password }));
+    } finally { setSubmitting(false); }
   };
 
   return (
@@ -99,6 +88,7 @@ export function LoginPage() {
 
           <figure className="group relative min-w-0 self-stretch" aria-label={t("Арендуемые пространства")} aria-roledescription={t("карусель пространств")}>
             <div className="photo-frame aspect-[4/5] h-full min-h-[440px] sm:aspect-[5/4] lg:aspect-auto lg:min-h-[560px]">
+              {HERO_SPACES.length === 0 && <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-ink-soft">{t("Нет данных")}</div>}
               <div
                 className="hero-carousel-track"
                 style={{ transform: `translateX(-${heroSpace * 100}%)` }}
@@ -182,10 +172,10 @@ export function LoginPage() {
             </div>
             <figcaption className="absolute top-4 right-4 max-w-[190px] bg-orange px-3 py-2 text-white">
               <span className="block font-mono text-[9.5px] tracking-[0.1em] uppercase text-white/75">
-                свободно сегодня
+                  {t("свободно сегодня")}
               </span>
               <span className="mt-1 block font-serif text-[17px] leading-none">
-                {freeToday} ч
+                  {loadError ? t("Нет данных") : `${freeToday} ${t("ч")}`}
               </span>
             </figcaption>
           </figure>
@@ -216,12 +206,12 @@ export function LoginPage() {
             </h2>
           </div>
           <p className="max-w-[38ch] text-[14px] leading-relaxed text-ink-soft">
-            {t("Фото, адрес, цена и вместимость помогут выбрать пространство до звонка.")}
+            {t("Каталог получен от сервера. Фотографии и точные адреса пока не предоставлены.")}
           </p>
         </div>
 
         <div className="mt-8 grid auto-rows-[160px] grid-cols-2 gap-2 sm:auto-rows-[200px] sm:gap-3 lg:auto-rows-[210px] lg:grid-cols-12">
-          {SPACE_SHOWCASE.map((space, index) => {
+          {HERO_SPACES.map((space, index) => {
             const wide = index === 0;
             const placement = wide
               ? "col-span-2 row-span-2 lg:col-span-5"
@@ -235,22 +225,22 @@ export function LoginPage() {
 
             return (
               <a
-                key={space.type}
+                key={space.id}
                 href="#login"
                 className={`photo-link group relative min-h-0 overflow-hidden bg-navy ${placement}`}
-                aria-label={`${space.title} — от ${ROOM_TYPES[space.type].price} BYN за час`}
+                aria-label={`${space.room} — ${money(space.price)}`}
               >
                 <div className="photo-frame absolute inset-0">
                   <img
                     src={space.image}
-                    alt={`${space.title}: интерьер пространства, доступного для аренды`}
+                    alt=""
                     decoding="async"
                   />
                 </div>
                 <div className="absolute inset-0 bg-gradient-to-t from-navy/95 via-navy/25 to-navy/5" />
                 <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-3 sm:p-4">
                   <span className="font-mono text-[10px] tracking-[0.12em] text-paper/70 uppercase">
-                    {String(index + 1).padStart(2, "0")} / 05
+                    {String(index + 1).padStart(2, "0")} / {String(HERO_SPACES.length).padStart(2, "0")}
                   </span>
                   <ArrowUpRight
                     className="size-4 text-paper/60 transition-colors group-hover:text-orange"
@@ -261,18 +251,18 @@ export function LoginPage() {
                   <div className="flex flex-col items-start gap-1.5 sm:flex-row sm:items-end sm:justify-between sm:gap-3">
                     <div className="min-w-0">
                       <h3 className="text-[18px] leading-tight tracking-[-0.02em] sm:text-[22px]">
-                        {space.title}
+                        {t(ROOM_TYPES[space.type].label)}
                       </h3>
                       <p
                         className={`mt-1.5 max-w-[30ch] text-[12.5px] leading-snug text-paper/65 ${
                           index === 0 ? "" : "hidden sm:block"
                         }`}
                       >
-                        {space.note}
+                        {space.school} · {space.room}
                       </p>
                     </div>
                     <p className="shrink-0 font-serif text-[15px] font-medium tabular-nums text-orange-soft sm:text-[17px]">
-                      {money(ROOM_TYPES[space.type].price)}
+                      {money(space.price)}
                     </p>
                   </div>
                 </div>
@@ -287,69 +277,21 @@ export function LoginPage() {
           <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_420px] lg:gap-24">
             <div>
               <h2 className="text-[clamp(2.2rem,4.5vw,3.8rem)] leading-[1.02] tracking-[-0.04em]">
-                {t("Клиент арендует.")}
+                {t("Клиент арендует —")}
                 <br />
-                <span className="text-blue italic">{t("УО сдаёт.")}</span>
+                <span className="text-blue italic">{t("школа оживает после звонка.")}</span>
               </h2>
-              <p className="mt-6 max-w-[42ch] text-[15px] leading-relaxed text-ink-soft">
-                {t("Один вход для обеих сторон. Роль меняет только то, что вы видите после входа: каталог свободных часов или кабинет с пространствами и бронями.")}
-              </p>
-
-              <dl className="mt-8 grid max-w-[430px] grid-cols-2 gap-x-6 gap-y-5 border-t border-ink/20 pt-5 sm:grid-cols-3">
-                <div>
-                  <dt className="mono-label">Пароль</dt>
-                  <dd className="mt-2 font-mono text-[13px]">{DEMO_PASSWORD}</dd>
-                </div>
-                <div>
-                  <dt className="mono-label">Номер</dt>
-                  <dd className="mt-2 text-[12.5px]">подставляется</dd>
-                </div>
-                <div>
-                  <dt className="mono-label">Оплата</dt>
-                  <dd className="mt-2 text-[12.5px]">демо</dd>
-                </div>
-              </dl>
-
-              <p className="mt-8 max-w-[36ch] border-l-2 border-orange pl-4 font-serif text-[15px] leading-relaxed text-ink-soft italic">
-                Демо-пароль для обеих ролей — {DEMO_PASSWORD}. Данные не покидают
-                браузер.
-              </p>
             </div>
 
             <div className="border border-ink/15 bg-surface p-5 sm:p-7">
               <div className="flex items-center justify-between border-b border-ink/15 pb-4">
-                <span className="mono-label">{t("Выберите роль")}</span>
+                <span className="mono-label">{t(role === "tenant" ? "Аккаунт арендатора" : "Кабинет УО")}</span>
               </div>
 
-              <div
-                className="mt-4 grid grid-cols-2 border-b border-line"
-                role="group"
-                aria-label="Роль"
-              >
-                {(["tenant", "master"] as Role[]).map((item) => {
-                  const active = role === item;
-                  return (
-                    <button
-                      key={item}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => switchRole(item)}
-                      className={`relative h-11 text-left text-[14px] font-medium transition-colors duration-150 ${
-                        active ? "text-ink" : "text-ink-mute hover:text-ink"
-                      }`}
-                    >
-                      {t(ROLE_LABEL[item])}
-                      {active && (
-                        <span className="absolute inset-x-0 -bottom-px h-0.5 bg-orange" />
-                      )}
-                    </button>
-                  );
-                })}
+              <div className="mt-4 grid grid-cols-2 gap-2" role="group" aria-label={t("Роль")}>
+                {(["tenant", "master"] as const).map((item) => <button key={item} type="button" disabled={submitting} aria-pressed={role === item} onClick={() => { setRole(item); setAuthMode("login"); setPassword(""); setError(null); }} className={`btn h-11 ${role === item ? "bg-ink text-paper" : "btn-quiet"}`}>{t(item === "tenant" ? "Арендатор" : "УО")}</button>)}
               </div>
-
-              <p className="mt-3 text-[14px] leading-relaxed text-ink-soft">
-                {t(ROLE_CAPTION[role])}
-              </p>
+              {role === "master" && <p className="mt-4 text-[14px] leading-relaxed text-ink-soft">{t("Лицей БГУ")} · {t("Введите пароль, выданный администратором.")}</p>}
 
               {role === "tenant" && (
                 <div className="mt-5 flex border-b border-line" role="group" aria-label={t("Действие с аккаунтом")}>
@@ -362,22 +304,23 @@ export function LoginPage() {
                 </div>
               )}
 
-              <form className="mt-6 space-y-5" onSubmit={submit} noValidate>
-                {authMode === "register" && role === "tenant" && (
+              <form className="mt-6 space-y-5" onSubmit={submit}>
+                {role === "tenant" && authMode === "register" && (
                   <>
                     <TextField id="register-surname" label={t("Фамилия")} value={surname} onChange={setSurname} autoComplete="family-name" />
                     <TextField id="register-first-name" label={t("Имя")} value={firstName} onChange={setFirstName} autoComplete="given-name" />
                     <TextField id="register-patronymic" label={t("Отчество")} value={patronymic} onChange={setPatronymic} autoComplete="additional-name" />
                   </>
                 )}
-                <div>
+                {role === "tenant" && <div>
                   <label htmlFor="phone" className="label mb-1 block">
                     {t("Телефон")}
                   </label>
                   <input
                     id="phone"
                     name="phone"
-                    type="tel"
+                     type="tel"
+                     required
                     inputMode="tel"
                     autoComplete="tel"
                     value={phone}
@@ -390,7 +333,7 @@ export function LoginPage() {
                     aria-describedby={error ? "login-error" : undefined}
                     className="field"
                   />
-                </div>
+                </div>}
 
                 <div>
                   <label htmlFor="password" className="label mb-1 block">
@@ -400,7 +343,8 @@ export function LoginPage() {
                     <input
                       id="password"
                       name="password"
-                      type={showPassword ? "text" : "password"}
+                       type={showPassword ? "text" : "password"}
+                       required
                       autoComplete={authMode === "register" ? "new-password" : "current-password"}
                       minLength={authMode === "register" ? 8 : undefined}
                       value={password}
@@ -434,17 +378,17 @@ export function LoginPage() {
                     role="alert"
                     className="text-[12.5px] leading-relaxed text-orange"
                   >
-                    {error}
+                    {t(error)}
                   </p>
                 )}
 
-                <button type="submit" className="btn btn-primary mt-2 h-12 w-full">
-                  {authMode === "register" ? t("Зарегистрироваться") : t(ROLE_CTA[role])}
+                <button type="submit" disabled={submitting} className="btn btn-primary mt-2 h-12 w-full">
+                  {submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}
                 </button>
               </form>
 
               <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
-                {t("Демо-режим: данные не отправляются на сервер, оплата имитируется.")}
+                {t("Регистрация и вход выполняются на сервере.")}
               </p>
             </div>
           </div>
@@ -455,9 +399,10 @@ export function LoginPage() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <Logo />
           <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] tracking-[0.08em] uppercase text-ink-mute">
-            <span>{t("Минск · 2026 · демо")}</span>
-            <a href="/guard" className="archive-link" aria-label={t("Открыть сканер для охраны")}>
-              {t("Сканер")}
+            <span>{t("Беларусь · 2026")}</span>
+            <a href="/guard" className="inline-flex min-h-9 items-center gap-1.5 border border-ink/20 px-2.5 font-sans text-[11px] font-semibold tracking-normal normal-case text-ink transition-colors hover:border-ink hover:bg-ink hover:text-paper">
+              <ScanLine className="size-3.5" aria-hidden="true" />
+              {t("Перейти к сканеру")}
             </a>
             <a
               href="https://www.pexels.com"

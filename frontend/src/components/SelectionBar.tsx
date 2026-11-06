@@ -35,7 +35,7 @@ export function SelectionBar({ count, hours, total, disabled = false, onClear, o
         </button>
 
         <button type="button" onClick={onBook} disabled={disabled} className="btn btn-primary h-12 px-5 text-[15px] disabled:cursor-not-allowed disabled:opacity-50">
-          Оформить
+          {t("Забронировать всё")}
         </button>
       </div>
     </div>

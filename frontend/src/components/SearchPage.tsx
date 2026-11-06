@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { ScanLine, SlidersHorizontal } from "lucide-react";
 
 import { nextDays, toISODate } from "../lib/data";
 import { freeHoursWord, intervalHours, intervalPrice, plural, roundMoney } from "../lib/format";
@@ -245,6 +245,14 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
           }}
         />
       )}
+
+      <footer className="mx-auto mt-4 flex max-w-[1180px] flex-wrap items-center justify-between gap-3 border-t border-ink/15 px-5 pt-4 sm:px-8">
+        <span className="font-mono text-[10px] tracking-[0.1em] text-ink-mute uppercase">{t("Беларусь · 2026")}</span>
+        <a href="/guard" className="inline-flex min-h-9 items-center gap-2 border border-ink/20 px-3 text-[12px] font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-paper">
+          <ScanLine className="size-4" aria-hidden="true" />
+          {t("Перейти к сканеру")}
+        </a>
+      </footer>
     </div>
   );
 }

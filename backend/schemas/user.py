@@ -7,6 +7,7 @@ class UserRole(str, Enum):
     """Допустимые роли пользователей в системе."""
 
     tenant = "tenant"
+    master = "master"
     admin = "admin"
     inspector = "inspector"
     guard = "guard"

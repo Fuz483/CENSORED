@@ -86,8 +86,6 @@ export function AvailabilityWindowPicker({
       >
         <div className="interval-slider__rail" />
         <div className="interval-slider__selection interval-slider__selection--availability" />
-        <span className="interval-slider__thumb interval-slider__thumb--availability" style={{ left: `clamp(11px, ${startPercent}%, calc(100% - 11px))` }} aria-hidden="true" />
-        <span className="interval-slider__thumb interval-slider__thumb--availability" style={{ left: `clamp(11px, ${endPercent}%, calc(100% - 11px))` }} aria-hidden="true" />
         <input type="range" min={0} max={MAX_INDEX} step={1} value={startIndex}
           onChange={(event) => updateStart(Number(event.target.value))}
           className="interval-slider__input interval-slider__input--start interval-slider__input--availability"

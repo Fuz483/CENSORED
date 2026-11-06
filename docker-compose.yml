@@ -29,6 +29,8 @@ services:
       - .env
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - room_photo_data:/app/uploads/room-photos
     depends_on:
       db:
         condition: service_healthy
@@ -40,3 +42,4 @@ services:
 
 volumes:
   postgres_data:
+  room_photo_data:

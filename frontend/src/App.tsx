@@ -7,12 +7,13 @@ import { SearchPage } from "./components/SearchPage";
 import { UoDashboard } from "./components/UoDashboard";
 import { ProfilePage } from "./components/ProfilePage";
 import { AppProvider, useApp } from "./state/AppState";
-import { LanguageProvider, type Language } from "./lib/i18n";
+import { LanguageProvider, useLanguage, type Language } from "./lib/i18n";
 
 const GuardPage = lazy(() => import("./components/GuardPage").then(({ GuardPage }) => ({ default: GuardPage })));
 
 function Root() {
-  const { user, bookings, ready } = useApp();
+  const { user, bookings, ready, loadError, reload } = useApp();
+  const { t } = useLanguage();
   const [view, setView] = useState<View>("search");
   const isGuardRoute = window.location.pathname.replace(/\/+$/, "") === "/guard";
   const myBookingCount = user
@@ -25,10 +26,14 @@ function Root() {
 
   if (!ready) return <div className="min-h-dvh bg-paper" aria-label="Загрузка" />;
   if (isGuardRoute) return <Suspense fallback={<div className="min-h-dvh bg-navy" aria-label="Загрузка сканера" />}><GuardPage /></Suspense>;
-  if (!user) return <LoginPage />;
+  const errorBanner = loadError && <div role="alert" className="border-b border-orange/30 bg-orange-soft px-5 py-3 text-[14px] text-ink">
+    {t(loadError)} <button type="button" onClick={() => void reload()} className="ml-3 underline">{t("Повторить")}</button>
+  </div>;
+  if (!user) return <>{errorBanner}<LoginPage /></>;
 
   return (
     <div className="min-h-dvh">
+      {errorBanner}
       <Header view={view} onNavigate={setView} bookingCount={myBookingCount} />
       {user.role === "master" ? (
         <UoDashboard />

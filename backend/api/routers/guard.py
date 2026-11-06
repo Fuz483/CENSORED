@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -11,11 +12,7 @@ from schemas.user import UserResponse
 
 router = APIRouter(prefix="/api/v1/guard", tags=["Пост охраны (QR-контроль)"])
 
-VALID_ACCESS_STATES = {
-    BookingState.confirmed.value,
-    BookingState.paid.value,
-    BookingState.active.value,
-}
+VALID_ACCESS_STATES = {BookingState.confirmed.value}
 
 
 @router.post(
@@ -52,15 +49,19 @@ async def scan_qr_code(
     tenant = first_slot.user
 
     total_price = sum((slot.price for slot in slots), Decimal("0.00"))
-    all_slots_valid = all(slot.state in VALID_ACCESS_STATES for slot in slots)
+    all_slots_confirmed = all(slot.state in VALID_ACCESS_STATES for slot in slots)
+    booking_is_for_today = all(slot.date == datetime.date.today() for slot in slots)
 
-    if all_slots_valid:
+    if all_slots_confirmed and booking_is_for_today:
         access_granted = True
-        reason = "Допуск разрешен: все часовые слоты сессии подтверждены."
+        reason = "Допуск разрешен: бесплатная бронь подтверждена и действует сегодня."
+    elif not booking_is_for_today:
+        access_granted = False
+        reason = f"Допуск запрещен: пропуск действует только в дату бронирования ({first_slot.date})."
     else:
         access_granted = False
         invalid_states = sorted({slot.state for slot in slots if slot.state not in VALID_ACCESS_STATES})
-        reason = f"Допуск запрещен: обнаружены слоты в недопустимом статусе ({', '.join(invalid_states)})."
+        reason = f"Допуск запрещен: бронь не подтверждена бесплатно (статус: {', '.join(invalid_states)})."
 
     return QRScanResponse(
         access_granted=access_granted,

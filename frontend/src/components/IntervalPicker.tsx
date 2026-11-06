@@ -143,8 +143,6 @@ export function IntervalPicker({
           />
         ))}
         <div className="interval-slider__selection" />
-        <span className="interval-slider__thumb" style={{ left: `clamp(11px, ${startPercent}%, calc(100% - 11px))` }} aria-hidden="true" />
-        <span className="interval-slider__thumb" style={{ left: `clamp(11px, ${endPercent}%, calc(100% - 11px))` }} aria-hidden="true" />
         <input
           type="range"
           min={0}

@@ -8,7 +8,7 @@ import { useLanguage } from "../lib/i18n";
  * slot data the catalog uses. No decorative fake numbers.
  */
 export function WeekAvailability({ className = "" }: { className?: string }) {
-  const { slots, listings } = useApp();
+  const { slots, listings, loadError } = useApp();
   const { t, language } = useLanguage();
   const days = nextDays(7).map(toISODate);
   const capacity = Math.max(1, listings.length * HOURS.length);
@@ -19,6 +19,8 @@ export function WeekAvailability({ className = "" }: { className?: string }) {
   }));
 
   const total = rows.reduce((sum, row) => sum + row.count, 0);
+
+  if (loadError && !listings.length) return <p role="status" className="border-t border-paper/25 py-6 text-paper/75">{t("Нет данных")}</p>;
 
   return (
     <div className={`min-w-0 ${className}`}>
