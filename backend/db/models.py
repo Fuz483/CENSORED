@@ -1,10 +1,12 @@
 import datetime
-from typing import List
+from decimal import Decimal
+from typing import List, Optional
 from sqlalchemy import (
     Date,
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Time,
     UniqueConstraint,
@@ -22,6 +24,7 @@ class User(Base):
     user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    passport_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     rating: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
 
@@ -33,7 +36,7 @@ class User(Base):
 
 
 class Booking(Base):
-    """Модель бронирования помещения (booking_table)."""
+    """Модель почасового слота бронирования помещения (booking_table)."""
 
     __tablename__ = "booking_table"
     __table_args__ = (
@@ -46,7 +49,10 @@ class Booking(Base):
     room: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     date: Mapped[datetime.date] = mapped_column(Date, index=True, nullable=False)
     start_time: Mapped[datetime.time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[datetime.time] = mapped_column(Time, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     state: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     user_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("user_table.user_id", ondelete="CASCADE"),

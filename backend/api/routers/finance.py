@@ -1,3 +1,4 @@
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict
 from fastapi import APIRouter, status
 from schemas.booking import RoomType
@@ -9,13 +10,18 @@ from schemas.finance import (
 
 router = APIRouter(prefix="/api/v1/finance", tags=["Финансовый модуль"])
 
-# Базовые часовые тарифные ставки по категориям помещений (в белорусских рублях)
-BASE_HOURLY_RATES: Dict[RoomType, float] = {
-    RoomType.sport_hall: 45.00,
-    RoomType.assembly_hall: 60.00,
-    RoomType.it_lab: 35.00,
-    RoomType.workshop: 30.00,
+# Базовые часовые тарифные ставки по категориям помещений (в BYN)
+BASE_HOURLY_RATES: Dict[RoomType, Decimal] = {
+    RoomType.sport_hall: Decimal("45.00"),
+    RoomType.assembly_hall: Decimal("60.00"),
+    RoomType.it_lab: Decimal("35.00"),
+    RoomType.workshop: Decimal("30.00"),
 }
+
+
+def get_room_hourly_price(type_room: RoomType) -> Decimal:
+    """Получение фиксированной стоимости 1-часового слота для заданного типа помещения."""
+    return BASE_HOURLY_RATES[type_room].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def calculate_decree_150_split(
@@ -29,13 +35,12 @@ def calculate_decree_150_split(
     - 15% — фонд оплаты труда (ФОТ);
     - 15% — фонд развития учреждения образования.
     """
-    hourly_rate = BASE_HOURLY_RATES[type_room]
+    hourly_rate = float(BASE_HOURLY_RATES[type_room])
     total_amount = round(hourly_rate * hours, 2)
 
     utilities = round(total_amount * 0.40, 2)
     budget = round(total_amount * 0.30, 2)
     payroll = round(total_amount * 0.15, 2)
-    # Вычисление остатка для точного соблюдения баланса при округлении копеек
     development = round(total_amount - (utilities + budget + payroll), 2)
 
     return FinanceCalculateResponse(
@@ -56,7 +61,7 @@ def calculate_decree_150_split(
     "/calculate",
     response_model=FinanceCalculateResponse,
     status_code=status.HTTP_200_OK,
-    summary="Расчет финансового распределения платежа",
+    summary="Расчет финансового распределения платежа (Указ № 150)",
 )
 async def calculate_finance_endpoint(
     payload: FinanceCalculateRequest,

@@ -18,7 +18,7 @@ async def create_user(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Создание учетной записи пользователя с проверкой уникальности внешнего идентификатора."""
+    """Создание учетной записи пользователя с сохранением паспортных данных / УНП."""
     stmt = select(User).where(User.user_id == payload.user_id)
     existing_user = (await db.execute(stmt)).scalar_one_or_none()
 
@@ -32,6 +32,7 @@ async def create_user(
         user_id=payload.user_id,
         name=payload.name,
         phone=payload.phone,
+        passport_id=payload.passport_id,
         role=payload.role.value,
         rating=payload.rating,
     )
