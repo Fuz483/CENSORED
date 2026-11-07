@@ -77,6 +77,7 @@ export async function registerLocalAccount(input: {
   firstName: string;
   patronymic: string;
   phone: string;
+  email?: string;
   password: string;
 }): Promise<User> {
   const surname = input.surname.trim();
@@ -85,7 +86,8 @@ export async function registerLocalAccount(input: {
   const phone = input.phone.trim();
   const phoneDigits = digits(phone);
 
-  if (!surname || !firstName || !patronymic) throw new Error("Заполните фамилию, имя и отчество.");
+  const email = input.email?.trim().toLowerCase() ?? "";
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Укажите корректный адрес электронной почты.");
   if (phoneDigits.length < 9) throw new Error("Введите корректный номер телефона.");
   if (input.password.length < 8) throw new Error("Пароль должен содержать не менее 8 символов.");
 
@@ -101,8 +103,9 @@ export async function registerLocalAccount(input: {
     user_id: `local-${randomBytes(8)}`,
     surname,
     firstName,
-    patronymic,
-    name: `${firstName} ${patronymic} ${surname}`,
+    ...(patronymic ? { patronymic } : {}),
+    ...(email ? { email } : {}),
+    name: [firstName, patronymic, surname].filter(Boolean).join(" ") || "Пользователь",
     phone,
     role: "tenant",
     rating: 5,
@@ -129,12 +132,15 @@ export function updateLocalProfile(user: User, input: {
   firstName: string;
   patronymic: string;
   phone: string;
+  email?: string;
 }): User {
   const surname = input.surname.trim();
   const firstName = input.firstName.trim();
   const patronymic = input.patronymic.trim();
   const phone = input.phone.trim();
-  if (!surname || !firstName || !patronymic) throw new Error("Заполните фамилию, имя и отчество.");
+  const email = input.email?.trim().toLowerCase() ?? "";
+  if (!surname || !firstName) throw new Error("Заполните фамилию и имя.");
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Укажите корректный адрес электронной почты.");
   if (digits(phone).length < 9) throw new Error("Введите корректный номер телефона.");
 
   const accounts = readLocalAccounts();
@@ -148,8 +154,9 @@ export function updateLocalProfile(user: User, input: {
     ...accounts[accountIndex].user,
     surname,
     firstName,
-    patronymic,
-    name: `${firstName} ${patronymic} ${surname}`,
+    ...(patronymic ? { patronymic } : { patronymic: undefined }),
+    ...(email ? { email } : { email: null }),
+    name: [firstName, patronymic, surname].filter(Boolean).join(" "),
     phone,
   };
   accounts[accountIndex] = { ...accounts[accountIndex], user: updated };

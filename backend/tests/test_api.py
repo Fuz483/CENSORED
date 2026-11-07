@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.database import Base, get_db
@@ -46,6 +47,8 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_auth_and_validation(self):
         user, headers = await self.register()
+        self.assertIsNone(user["surname"])
+        self.assertIsNone(user["email"])
         self.assertEqual((await self.client.get("/api/v1/auth/me", headers=headers)).json()["id"], user["id"])
         bad_login = await self.client.post("/api/v1/auth/login", json={"phone": user["phone"], "password": "wrong"})
         self.assertEqual(bad_login.status_code, 401)
@@ -59,6 +62,49 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
             })
             self.assertEqual(available.status_code, 200, available.text)
         self.assertEqual((await self.client.post("/api/v1/bookings", json={})).status_code, 401)
+
+    async def test_registration_and_profile_update(self):
+        response = await self.client.post("/api/v1/auth/register", json={
+            "name": "Анна Ковалёва", "surname": "Ковалёва", "first_name": "Анна",
+            "patronymic": "", "email": "  ANNA@example.com ",
+            "phone": "+375291234567", "password": "TestPassword123",
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        registered = response.json()["user"]
+        headers = {"Authorization": f"Bearer {response.json()['access_token']}"}
+        self.assertEqual(registered["surname"], "Ковалёва")
+        self.assertEqual(registered["first_name"], "Анна")
+        self.assertIsNone(registered["patronymic"])
+        self.assertEqual(registered["email"], "anna@example.com")
+
+        update = await self.client.patch("/api/v1/auth/me", headers=headers, json={
+            "surname": "Смирнова", "first_name": "Анна", "patronymic": "Игоревна",
+            "email": "anna.new@example.com", "phone": "+375291234567",
+        })
+        self.assertEqual(update.status_code, 200, update.text)
+        self.assertEqual(update.json()["name"], "Анна Игоревна Смирнова")
+        self.assertEqual(update.json()["email"], "anna.new@example.com")
+        self.assertEqual(update.json()["phone"], "+375291234567")
+        persisted = await self.client.get("/api/v1/auth/me", headers=headers)
+        self.assertEqual(persisted.status_code, 200)
+        self.assertEqual(persisted.json()["surname"], "Смирнова")
+        self.assertEqual(persisted.json()["email"], "anna.new@example.com")
+
+        other, _ = await self.register("+375291234568")
+        conflict = await self.client.patch("/api/v1/auth/me", headers=headers, json={
+            "surname": "Смирнова", "first_name": "Анна", "phone": other["phone"],
+        })
+        self.assertEqual(conflict.status_code, 409)
+        unauthorized = await self.client.patch("/api/v1/auth/me", json={
+            "surname": "Смирнова", "first_name": "Анна", "phone": "+375291234567",
+        })
+        self.assertEqual(unauthorized.status_code, 401)
+
+        invalid_email = await self.client.post("/api/v1/auth/register", json={
+            "name": "Пользователь", "phone": "+375291234569",
+            "password": "TestPassword123", "email": "not-an-email",
+        })
+        self.assertEqual(invalid_email.status_code, 422)
 
     async def test_booking_availability_cancel_and_rebook(self):
         user, headers = await self.register()

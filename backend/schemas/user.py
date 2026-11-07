@@ -31,6 +31,10 @@ class UserResponse(BaseModel):
     user_id: str
     name: str
     phone: str
+    surname: Optional[str] = None
+    first_name: Optional[str] = None
+    patronymic: Optional[str] = None
+    email: Optional[str] = None
     passport_id: Optional[str] = None
     role: UserRole
     rating: float

@@ -8,7 +8,7 @@ from api.dependencies import get_current_user
 from core.security import create_access_token, hash_password, verify_password
 from db.database import get_db
 from db.models import User
-from schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UoLoginRequest
+from schemas.auth import LoginRequest, ProfileUpdateRequest, RegisterRequest, TokenResponse, UoLoginRequest
 from core.config import settings
 from core.uo_demo import UO_DEMO_USER_ID
 from schemas.user import UserResponse
@@ -29,10 +29,18 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     existing = (await db.execute(select(User).where(User.phone == phone))).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Аккаунт с таким телефоном уже существует.")
+    surname = payload.surname.strip() or None if payload.surname else None
+    first_name = payload.first_name.strip() or None if payload.first_name else None
+    patronymic = payload.patronymic.strip() or None if payload.patronymic else None
+    name = " ".join(part for part in (first_name, patronymic, surname) if part) or payload.name.strip()
     user = User(
         user_id=f"USR-{secrets.token_urlsafe(18)}",
-        name=payload.name.strip(),
+        name=name,
         phone=phone,
+        surname=surname,
+        first_name=first_name,
+        patronymic=patronymic,
+        email=payload.email,
         role="tenant",
         rating=5.0,
         password_hash=hash_password(payload.password),
@@ -53,6 +61,28 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(user: User = Depends(get_current_user)) -> User:
+    return user
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_me(
+    payload: ProfileUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    phone = payload.phone.strip()
+    duplicate = (await db.execute(select(User).where(User.phone == phone, User.user_id != user.user_id))).scalar_one_or_none()
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Аккаунт с таким телефоном уже существует.")
+
+    user.surname = payload.surname.strip()
+    user.first_name = payload.first_name.strip()
+    user.patronymic = payload.patronymic.strip() if payload.patronymic and payload.patronymic.strip() else None
+    user.phone = phone
+    user.email = payload.email
+    user.name = " ".join(part for part in (user.first_name, user.patronymic, user.surname) if part)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 

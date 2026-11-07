@@ -13,6 +13,7 @@ export interface User {
   surname?: string;
   firstName?: string;
   patronymic?: string;
+  email?: string | null;
 }
 
 export interface Listing {

@@ -1,5 +1,5 @@
-import { useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Eye, EyeOff, ScanLine } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowUpRight, Eye, EyeOff, ScanLine, X } from "lucide-react";
 
 import { ROOM_TYPES, ROOM_TYPE_LIST, toISODate } from "../lib/data";
 import { money } from "../lib/format";
@@ -16,10 +16,10 @@ export function LoginPage() {
     return listing ? [listing] : [];
   });
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authOpen, setAuthOpen] = useState(false);
   const [role, setRole] = useState<"tenant" | "master">("tenant");
   const [surname, setSurname] = useState("");
   const [firstName, setFirstName] = useState("");
-  const [patronymic, setPatronymic] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -31,13 +31,22 @@ export function LoginPage() {
 
   const freeToday = freeHourCount(slots, toISODate(new Date()));
 
+  useEffect(() => {
+    if (!authOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !submitting) setAuthOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [authOpen, submitting]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (submitting) return;
     setSubmitting(true);
     try {
       setError(role === "tenant" && authMode === "register"
-        ? await register({ surname, firstName, patronymic, phone, password })
+        ? await register({ surname, firstName, patronymic: "", email: "", phone, password })
         : await login({ role, phone, password }));
     } finally { setSubmitting(false); }
   };
@@ -51,13 +60,8 @@ export function LoginPage() {
           </a>
           <div className="flex shrink-0 items-center gap-2 sm:gap-7">
             <LanguageToggle />
-            <a
-              href="#login"
-              className="inline-flex shrink-0 items-center gap-1 border-b border-orange pb-0.5 text-[12px] font-medium transition-colors hover:text-orange sm:gap-1.5 sm:text-[13px]"
-            >
-              {t("Войти")}
-              <ArrowUpRight className="size-3.5" strokeWidth={1.8} />
-            </a>
+            <button type="button" onClick={() => { setAuthMode("login"); setAuthOpen(true); setError(null); }} className="inline-flex min-h-10 shrink-0 items-center border-b border-orange px-1 text-[12px] font-medium transition-colors hover:text-orange sm:text-[13px]">{t("Войти")}</button>
+            <button type="button" onClick={() => { setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-10 px-3 text-[11px] sm:px-4 sm:text-[12px]">{t("Зарегистрироваться")}</button>
           </div>
         </div>
       </header>
@@ -76,9 +80,7 @@ export function LoginPage() {
             </p>
 
             <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-3">
-              <a href="#login" className="btn btn-primary h-12 px-6">
-                {t("Войти и выбрать")}
-              </a>
+              <button type="button" onClick={() => { setAuthMode("login"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-12 px-6">{t("Войти и выбрать")}</button>
               <a href="#spaces" className="archive-link text-[13px] font-medium">
                 {t("Посмотреть пространства")}
               </a>
@@ -273,127 +275,56 @@ export function LoginPage() {
       </section>
 
       <section id="login" className="border-b border-ink/15">
-        <div className="mx-auto max-w-[1180px] px-5 py-16 sm:px-8 sm:py-20 lg:py-24">
-          <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_420px] lg:gap-24">
-            <div>
+        <div className="mx-auto max-w-[1180px] px-5 py-10 sm:px-8 sm:py-12 lg:py-14">
+          <div className="flex flex-col items-start gap-5">
+            <div className="max-w-[700px]">
               <h2 className="text-[clamp(2.2rem,4.5vw,3.8rem)] leading-[1.02] tracking-[-0.04em]">
                 {t("Клиент арендует —")}
                 <br />
                 <span className="text-blue italic">{t("школа оживает после звонка.")}</span>
               </h2>
+              <p className="mt-3 max-w-[48ch] text-[15px] leading-relaxed text-ink-soft">{t("Создайте аккаунт арендатора, выберите помещение и время с шагом 15 минут.")}</p>
             </div>
-
-            <div className="border border-ink/15 bg-surface p-5 sm:p-7">
-              <div className="flex items-center justify-between border-b border-ink/15 pb-4">
-                <span className="mono-label">{t(role === "tenant" ? "Аккаунт арендатора" : "Кабинет УО")}</span>
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-2" role="group" aria-label={t("Роль")}>
-                {(["tenant", "master"] as const).map((item) => <button key={item} type="button" disabled={submitting} aria-pressed={role === item} onClick={() => { setRole(item); setAuthMode("login"); setPassword(""); setError(null); }} className={`btn h-11 ${role === item ? "bg-ink text-paper" : "btn-quiet"}`}>{t(item === "tenant" ? "Арендатор" : "УО")}</button>)}
-              </div>
-              {role === "master" && <p className="mt-4 text-[14px] leading-relaxed text-ink-soft">{t("Лицей БГУ")} · {t("Введите пароль, выданный администратором.")}</p>}
-
-              {role === "tenant" && (
-                <div className="mt-5 flex border-b border-line" role="group" aria-label={t("Действие с аккаунтом")}>
-                  <button type="button" aria-pressed={authMode === "login"} onClick={() => { setAuthMode("login"); setError(null); }} className={`h-10 flex-1 border-b-2 text-left text-[13px] font-medium ${authMode === "login" ? "border-orange text-ink" : "border-transparent text-ink-mute"}`}>
-                    {t("Войти")}
-                  </button>
-                  <button type="button" aria-pressed={authMode === "register"} onClick={() => { setAuthMode("register"); setError(null); }} className={`h-10 flex-1 border-b-2 text-left text-[13px] font-medium ${authMode === "register" ? "border-orange text-ink" : "border-transparent text-ink-mute"}`}>
-                    {t("Создать аккаунт")}
-                  </button>
-                </div>
-              )}
-
-              <form className="mt-6 space-y-5" onSubmit={submit}>
-                {role === "tenant" && authMode === "register" && (
-                  <>
-                    <TextField id="register-surname" label={t("Фамилия")} value={surname} onChange={setSurname} autoComplete="family-name" />
-                    <TextField id="register-first-name" label={t("Имя")} value={firstName} onChange={setFirstName} autoComplete="given-name" />
-                    <TextField id="register-patronymic" label={t("Отчество")} value={patronymic} onChange={setPatronymic} autoComplete="additional-name" />
-                  </>
-                )}
-                {role === "tenant" && <div>
-                  <label htmlFor="phone" className="label mb-1 block">
-                    {t("Телефон")}
-                  </label>
-                  <input
-                    id="phone"
-                    name="phone"
-                     type="tel"
-                     required
-                    inputMode="tel"
-                    autoComplete="tel"
-                    value={phone}
-                    onChange={(event) => {
-                      setPhone(event.target.value);
-                      setError(null);
-                    }}
-                    placeholder="+375 (29) 123-45-67"
-                    aria-invalid={Boolean(error)}
-                    aria-describedby={error ? "login-error" : undefined}
-                    className="field"
-                  />
-                </div>}
-
-                <div>
-                  <label htmlFor="password" className="label mb-1 block">
-                    {t("Пароль")}
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="password"
-                      name="password"
-                       type={showPassword ? "text" : "password"}
-                       required
-                      autoComplete={authMode === "register" ? "new-password" : "current-password"}
-                      minLength={authMode === "register" ? 8 : undefined}
-                      value={password}
-                      onChange={(event) => {
-                        setPassword(event.target.value);
-                        setError(null);
-                      }}
-                      placeholder="••••••••"
-                      aria-invalid={Boolean(error)}
-                      aria-describedby={error ? "login-error" : undefined}
-                      className="field pr-12"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((value) => !value)}
-                      className="absolute right-0 bottom-2 grid size-8 place-items-center text-ink-mute transition-colors hover:text-ink"
-                      aria-label={t(showPassword ? "Скрыть пароль" : "Показать пароль")}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="size-4" strokeWidth={1.8} />
-                      ) : (
-                        <Eye className="size-4" strokeWidth={1.8} />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {error && (
-                  <p
-                    id="login-error"
-                    role="alert"
-                    className="text-[12.5px] leading-relaxed text-orange"
-                  >
-                    {t(error)}
-                  </p>
-                )}
-
-                <button type="submit" disabled={submitting} className="btn btn-primary mt-2 h-12 w-full">
-                  {submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}
-                </button>
-              </form>
-
-              <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
-                {t("Регистрация и вход выполняются на сервере.")}
-              </p>
+            <div className="flex flex-wrap gap-2.5">
+              <button type="button" onClick={() => { setAuthMode("login"); setAuthOpen(true); setError(null); }} className="btn btn-quiet h-12 px-6">{t("Войти")}</button>
+              <button type="button" onClick={() => { setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-12 px-6">{t("Зарегистрироваться")}</button>
             </div>
           </div>
         </div>
       </section>
+
+      {authOpen && <div className="overlay-in fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-navy/65 p-2 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) setAuthOpen(false); }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="auth-title" className="auth-dialog relative w-full max-w-[560px] border border-ink/15 bg-paper shadow-2xl">
+            <div className="auth-dialog-content">
+              <div className="auth-dialog-header flex items-start justify-between gap-4 border-b border-line">
+                <div><span className="mono-label">{t(role === "tenant" ? "Аккаунт арендатора" : "Кабинет УО")}</span><h2 id="auth-title" className="auth-dialog-title mt-1 font-serif leading-none tracking-[-0.04em]">{t(authMode === "register" ? "Создать аккаунт" : "Войти")}</h2></div>
+                <button type="button" onClick={() => setAuthOpen(false)} disabled={submitting} className="grid size-10 shrink-0 place-items-center border border-line text-ink-mute transition-colors hover:border-ink hover:text-ink" aria-label={t("Закрыть")}><X className="size-4" /></button>
+              </div>
+
+              {authMode === "login" && <div className="auth-dialog-role grid grid-cols-2 gap-2" role="group" aria-label={t("Роль")}>
+                {(["tenant", "master"] as const).map((item) => <button key={item} type="button" disabled={submitting} aria-pressed={role === item} onClick={() => { setRole(item); setAuthMode("login"); setPassword(""); setError(null); }} className={`btn h-11 ${role === item ? "border border-orange/45 bg-orange/10 text-ink" : "btn-quiet"}`}>{t(item === "tenant" ? "Арендатор" : "УО")}</button>)}
+              </div>}
+              {role === "master" && <p className="mt-3 text-[13px] leading-relaxed text-ink-soft">{t("Лицей БГУ")} · {t("Введите пароль, выданный администратором.")}</p>}
+
+              <form className="auth-dialog-form" onSubmit={submit}>
+                {authMode === "register" && role === "tenant" && <>
+                  <div><label htmlFor="surname" className="auth-dialog-label label block">{t("Фамилия")}</label><input id="surname" name="surname" type="text" required autoComplete="family-name" value={surname} onChange={(event) => { setSurname(event.target.value); setError(null); }} className="auth-dialog-field field" /></div>
+                  <div><label htmlFor="first-name" className="auth-dialog-label label block">{t("Имя")}</label><input id="first-name" name="first_name" type="text" required autoComplete="given-name" value={firstName} onChange={(event) => { setFirstName(event.target.value); setError(null); }} className="auth-dialog-field field" /></div>
+                </>}
+                {role === "tenant" && <div><label htmlFor="phone" className="auth-dialog-label label block">{t("Телефон")}</label><input id="phone" name="phone" type="tel" required inputMode="tel" autoComplete="tel" value={phone} onChange={(event) => { setPhone(event.target.value); setError(null); }} placeholder="+375 (29) 123-45-67" aria-invalid={Boolean(error)} aria-describedby={error ? "login-error" : undefined} className="auth-dialog-field field" /></div>}
+                <div><label htmlFor="password" className="auth-dialog-label label block">{t("Пароль")}</label><div className="relative"><input id="password" name="password" type={showPassword ? "text" : "password"} required autoComplete={authMode === "register" ? "new-password" : "current-password"} minLength={authMode === "register" ? 8 : undefined} value={password} onChange={(event) => { setPassword(event.target.value); setError(null); }} placeholder="••••••••" aria-invalid={Boolean(error)} aria-describedby={error ? "login-error" : undefined} className="auth-dialog-field field pr-12" /><button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-0 bottom-1 grid size-8 place-items-center text-ink-mute transition-colors hover:text-ink" aria-label={t(showPassword ? "Скрыть пароль" : "Показать пароль")}>{showPassword ? <EyeOff className="size-4" strokeWidth={1.8} /> : <Eye className="size-4" strokeWidth={1.8} />}</button></div>{authMode === "register" && role === "tenant" && <p className="mt-1 text-[11px] text-ink-mute">{t("Не менее 8 символов")}</p>}</div>
+                {error && <p id="login-error" role="alert" className="text-[12.5px] leading-relaxed text-orange">{t(error)}</p>}
+                <button type="submit" disabled={submitting} className="btn btn-primary h-11 w-full">{submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}</button>
+              </form>
+              {role === "tenant" && <p className="auth-dialog-footer text-[12px] text-ink-soft">
+                {authMode === "register" ? t("Уже есть аккаунт?") : t("Нет аккаунта?")} {" "}
+                <button type="button" onClick={() => { setAuthMode(authMode === "register" ? "login" : "register"); setError(null); }} className="font-semibold text-ink underline decoration-line-strong underline-offset-2 hover:text-orange">
+                  {authMode === "register" ? t("Войти") : t("Зарегистрироваться")}
+                </button>
+              </p>}
+            </div>
+        </section>
+      </div>}
 
       <footer className="mx-auto max-w-[1180px] px-5 py-8 sm:px-8">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -415,27 +346,6 @@ export function LoginPage() {
           </div>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  autoComplete,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  autoComplete: string;
-}) {
-  return (
-    <div>
-      <label htmlFor={id} className="label mb-1 block">{label}</label>
-      <input id={id} name={id} autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} className="field" required />
     </div>
   );
 }

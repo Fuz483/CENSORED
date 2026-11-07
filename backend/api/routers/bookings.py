@@ -220,6 +220,10 @@ async def create_booking(
         if existing_room is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Помещение не найдено в каталоге.")
 
+    duration_minutes = round(payload.hours * 60)
+    slot_start = payload.start_time
+    slot_end = add_minutes(slot_start, duration_minutes)
+
     custom_listing = (await db.execute(select(RoomListing).where(
         RoomListing.school == payload.school,
         RoomListing.type_room == payload.type_room.value,
@@ -228,10 +232,6 @@ async def create_booking(
     if custom_listing is not None:
         if payload.start_time < custom_listing.available_from or slot_end > custom_listing.available_to:
             raise HTTPException(status_code=400, detail="Выбранное время недоступно для этого помещения.")
-
-    duration_minutes = round(payload.hours * 60)
-    slot_start = payload.start_time
-    slot_end = add_minutes(slot_start, duration_minutes)
 
     collision_stmt = select(Booking).where(
         and_(

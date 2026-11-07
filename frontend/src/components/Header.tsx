@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 import { ROLE_LABEL } from "../lib/roles";
 import { useApp } from "../state/AppState";
@@ -49,8 +49,8 @@ export function Header({ view, onNavigate, bookingCount }: HeaderProps) {
                 </span>
               )}
             </NavLink>
-            <button type="button" onClick={() => onNavigate("profile")} aria-label={t("Профиль")} aria-current={view === "profile" ? "page" : undefined} className={`grid size-9 shrink-0 place-items-center border-b-2 transition-colors ${view === "profile" ? "border-orange text-ink" : "border-transparent text-ink-mute hover:text-ink"}`}>
-              <UserRound className="size-4" />
+            <button type="button" onClick={() => onNavigate("profile")} aria-current={view === "profile" ? "page" : undefined} className={`flex h-16 shrink-0 items-center whitespace-nowrap border-b-2 text-[13px] font-medium transition-colors ${view === "profile" ? "border-orange text-ink" : "border-transparent text-ink-mute hover:text-ink"}`}>
+              {t("Профиль")}
             </button>
           </nav>
         ) : (

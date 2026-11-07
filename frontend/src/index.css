@@ -39,6 +39,12 @@
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
+    scrollbar-width: none;
+  }
+
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
   }
 
   body {
@@ -180,25 +186,30 @@
     background: var(--color-orange);
   }
 
-  .availability-track {
-    background-image: linear-gradient(to top, rgb(242 247 250 / 13%) 1px, transparent 1px);
+  .availability-plot {
+    background-image: linear-gradient(to top, rgb(242 247 250 / 18%) 1px, transparent 1px);
     background-size: 100% 25%;
+    background-position: bottom;
+    background-repeat: repeat-y;
   }
 
   .availability-bar {
     min-height: 0;
+    z-index: 1;
     transform-origin: bottom;
     animation: availabilityRise var(--dur-4) var(--ease-out) both;
   }
 
   .availability-bar-today {
-    background: linear-gradient(to top, #d9774f, #f3a47b);
-    box-shadow: 0 0 22px rgb(243 164 123 / 18%);
+    background: #f3a47b;
   }
 
   .availability-bar-other {
-    background: linear-gradient(to top, #398c85, #75c9c0);
-    box-shadow: 0 0 20px rgb(117 201 192 / 12%);
+    background: #75c9c0;
+  }
+
+  .availability-axis > span {
+    line-height: 1;
   }
 
   .photo-link:hover .photo-frame img,
@@ -447,6 +458,86 @@
 
 .overlay-in {
   animation: overlayIn 0.14s ease-out both;
+}
+
+.auth-dialog {
+  max-height: calc(100dvh - 1rem);
+  overflow: hidden;
+}
+
+.auth-dialog-content {
+  padding: clamp(0.75rem, 3vh, 1.75rem) clamp(1rem, 4vw, 2.25rem);
+}
+
+.auth-dialog-header {
+  padding-bottom: clamp(0.5rem, 1.5vh, 1rem);
+}
+
+.auth-dialog-title {
+  font-size: clamp(1.75rem, 5vw, 3rem);
+}
+
+.auth-dialog-role {
+  margin-top: clamp(0.5rem, 1.5vh, 1rem);
+}
+
+.auth-dialog-form {
+  display: grid;
+  gap: clamp(0.375rem, 1.2vh, 0.75rem);
+  margin-top: clamp(0.625rem, 1.8vh, 1.25rem);
+}
+
+.auth-dialog-label {
+  margin-bottom: 0.125rem;
+}
+
+.auth-dialog-field {
+  height: clamp(2.125rem, 6vh, 2.75rem);
+}
+
+.auth-dialog-form > button {
+  height: clamp(2.5rem, 6.5vh, 2.75rem);
+}
+
+.auth-dialog-footer {
+  margin-top: clamp(0.5rem, 1.5vh, 0.75rem);
+}
+
+@media (max-height: 520px) {
+  .auth-dialog-content {
+    padding-block: 0.5rem;
+  }
+
+  .auth-dialog-header {
+    padding-bottom: 0.375rem;
+  }
+
+  .auth-dialog-title {
+    font-size: 1.625rem;
+  }
+
+  .auth-dialog-form {
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .auth-dialog-label {
+    font-size: 0.7rem;
+    line-height: 1rem;
+  }
+
+  .auth-dialog-field {
+    height: 2rem;
+    font-size: 0.875rem;
+  }
+
+  .auth-dialog-form > button {
+    height: 2.25rem;
+  }
+
+  .auth-dialog-footer {
+    margin-top: 0.375rem;
+  }
 }
 
 .sheet-in {

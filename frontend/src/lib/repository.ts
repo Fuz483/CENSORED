@@ -11,10 +11,11 @@ export interface RegisterInput {
   firstName: string;
   patronymic: string;
   phone: string;
+  email: string;
   password: string;
 }
 
-export type ProfileInput = Pick<RegisterInput, "surname" | "firstName" | "patronymic" | "phone">;
+export type ProfileInput = Pick<RegisterInput, "surname" | "firstName" | "patronymic" | "phone" | "email">;
 
 export interface NewListingInput {
   school: string;

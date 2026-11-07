@@ -69,6 +69,27 @@ interface ApiQrScanResult {
   total_price: string | number;
   user: { name: string; phone: string };
 }
+interface ApiUser extends Omit<User, "firstName" | "surname" | "patronymic" | "email"> {
+  surname?: string | null;
+  first_name?: string | null;
+  patronymic?: string | null;
+  email?: string | null;
+}
+
+function mapApiUser(user: ApiUser): User {
+  return {
+    id: user.id,
+    user_id: user.user_id,
+    name: user.name,
+    phone: user.phone,
+    role: user.role,
+    rating: user.rating,
+    surname: user.surname ?? undefined,
+    firstName: user.first_name ?? undefined,
+    patronymic: user.patronymic ?? undefined,
+    email: user.email ?? null,
+  };
+}
 const TOKEN_KEY = "plyacouka-api-token-v1";
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const retryableProxyStatuses = new Set([502, 503, 504]);
@@ -144,7 +165,7 @@ export class RestRepository implements AppRepository {
 
   async restoreSession(): Promise<User | null> {
     if (!this.token) return null;
-    try { return this.supportedUser(await this.request<User>("/auth/me", "GET", undefined, true)); }
+    try { return this.supportedUser(mapApiUser(await this.request<ApiUser>("/auth/me", "GET", undefined, true))); }
     catch (error) {
       if (error instanceof RepositoryError && error.code === "401") return null;
       throw error;
@@ -152,8 +173,8 @@ export class RestRepository implements AppRepository {
   }
 
   private async authenticate(path: string, body: unknown): Promise<User> {
-    const result = await this.request<{ access_token: string; user: User }>(path, "POST", body);
-    const user = this.supportedUser(result.user);
+    const result = await this.request<{ access_token: string; user: ApiUser }>(path, "POST", body);
+    const user = this.supportedUser(mapApiUser(result.user));
     this.token = result.access_token;
     try { sessionStorage.setItem(TOKEN_KEY, this.token); } catch { /* Session remains usable in this tab. */ }
     return user;
@@ -166,8 +187,9 @@ export class RestRepository implements AppRepository {
 
   async register(input: RegisterInput): Promise<User> {
     return this.authenticate("/auth/register", {
-      name: [input.surname, input.firstName, input.patronymic].map((part) => part.trim()).filter(Boolean).join(" "),
-      phone: input.phone.trim(), password: input.password,
+      name: [input.firstName, input.patronymic, input.surname].map((part) => part.trim()).filter(Boolean).join(" ") || "Пользователь",
+      surname: input.surname.trim() || null, first_name: input.firstName.trim() || null, patronymic: input.patronymic.trim() || null,
+      email: input.email.trim() || null, phone: input.phone.trim(), password: input.password,
     });
   }
 
@@ -300,7 +322,13 @@ export class RestRepository implements AppRepository {
     await this.request(`/bookings/${id}/state`, "PATCH", { state: "cancelled" }, true);
   }
 
-  async updateProfile(): Promise<never> { throw new RepositoryError("Изменение профиля пока недоступно."); }
+  async updateProfile(_user: User, input: import("./repository").ProfileInput): Promise<User> {
+    const updated = await this.request<ApiUser>("/auth/me", "PATCH", {
+      surname: input.surname.trim(), first_name: input.firstName.trim(),
+      patronymic: input.patronymic.trim() || null, email: input.email.trim() || null, phone: input.phone.trim(),
+    }, true);
+    return this.supportedUser(mapApiUser(updated));
+  }
   async addListing(user: User, input: NewListingInput): Promise<Listing> {
     if (user.role !== "master") throw new RepositoryError("Нет доступа к добавлению пространства.", "403");
     if (!this.token) throw new RepositoryError("Войдите в аккаунт.", "401");
