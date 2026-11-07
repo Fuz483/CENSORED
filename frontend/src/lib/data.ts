@@ -1,5 +1,6 @@
 import type { Listing, RoomType, Slot } from "./types";
-import { BOOKING_STEP_MINUTES, timeToMinutes } from "./intervals";
+import { addCalendarDays, minskDate, weekdayIndex } from "./format";
+import { BOOKING_STEP_MINUTES, minutesToTime, timeToMinutes } from "./intervals";
 
 export const HOURS = [14, 15, 16, 17, 18, 19, 20];
 export const DAYS_AHEAD = 7;
@@ -334,22 +335,8 @@ function mulberry32(seed: number) {
   };
 }
 
-export function toISODate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-export function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-export function nextDays(count = DAYS_AHEAD): Date[] {
-  const today = new Date();
-  return Array.from({ length: count }, (_, i) => addDays(today, i));
+export function nextDays(count = DAYS_AHEAD, start = minskDate()): string[] {
+  return Array.from({ length: count }, (_, index) => addCalendarDays(start, index));
 }
 
 /**
@@ -359,10 +346,11 @@ export function nextDays(count = DAYS_AHEAD): Date[] {
 export function buildSlots(listings: Listing[], startId = 1): Slot[] {
   const slots: Slot[] = [];
   let nextSlotId = startId;
+  const dates = nextDays();
   for (const listing of listings) {
-    for (const day of nextDays()) {
-      const date = toISODate(day);
-      const weekend = day.getDay() === 0 || day.getDay() === 6;
+    for (const date of dates) {
+      const weekday = weekdayIndex(date);
+      const weekend = weekday === 0 || weekday === 6;
       const busyChance = weekend ? 0.58 : 0.32;
       const opening = timeToMinutes(listing.availableFrom) ?? 14 * 60;
       const closing = timeToMinutes(listing.availableTo) ?? 21 * 60;
@@ -375,8 +363,8 @@ export function buildSlots(listings: Listing[], startId = 1): Slot[] {
           id: nextSlotId++,
           listingId: listing.id,
           date,
-          startTime: formatTime(minute),
-          endTime: formatTime(minute + BOOKING_STEP_MINUTES),
+          startTime: minutesToTime(minute),
+          endTime: minutesToTime(minute + BOOKING_STEP_MINUTES),
           price: listing.price,
           state: busy ? 1 : 0,
           userId: busy ? 900 + listing.id : null,
@@ -385,8 +373,4 @@ export function buildSlots(listings: Listing[], startId = 1): Slot[] {
     }
   }
   return slots;
-}
-
-function formatTime(minutes: number): string {
-  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }

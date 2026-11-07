@@ -10,6 +10,30 @@ const focusableSelector = [
   "[tabindex]",
 ].join(",");
 
+let pointerOpener: HTMLElement | null = null;
+
+export function trackDialogOpeners() {
+  const remember = (event: MouseEvent) => {
+    // WebKit does not focus buttons on pointer activation. Keep the trigger
+    // for dialogs mounted during this click, then fall back to activeElement.
+    const target = event.detail > 0 && event.target instanceof Element
+      ? event.target.closest(focusableSelector)
+      : null;
+    const opener = target instanceof HTMLElement && target.tabIndex >= 0 && !target.matches(":disabled")
+      ? target
+      : null;
+    pointerOpener = opener;
+    if (opener) window.setTimeout(() => {
+      if (pointerOpener === opener) pointerOpener = null;
+    }, 0);
+  };
+  document.addEventListener("click", remember, true);
+  return () => {
+    document.removeEventListener("click", remember, true);
+    pointerOpener = null;
+  };
+}
+
 function getTabStops(dialog: HTMLElement) {
   return [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(
     (element) =>
@@ -33,7 +57,9 @@ export function useDialog<T extends HTMLElement = HTMLElement>(
     const dialog = ref.current;
     if (!open || !dialog || !dialog.getClientRects().length) return;
 
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const activeElement = document.activeElement;
+    const previousFocus = pointerOpener ?? (activeElement instanceof HTMLElement ? activeElement : null);
+    pointerOpener = null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     (getTabStops(dialog)[0] ?? dialog).focus({ preventScroll: true });

@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { ScanLine, SlidersHorizontal } from "lucide-react";
 
-import { nextDays, toISODate } from "../lib/data";
-import { freeHoursWord, intervalHours, intervalPrice, plural, roundMoney } from "../lib/format";
+import { nextDays } from "../lib/data";
+import { freeHoursWord, intervalHours, intervalPrice, minskDate, plural, roundMoney } from "../lib/format";
 import type { BookingRequest, Filters } from "../lib/types";
-import { isRangeAvailable } from "../lib/intervals";
-import { freeHourCount, freeSlotHours, freeSlots, useApp } from "../state/AppState";
+import { isDayRangeAvailable } from "../lib/intervals";
+import { freeSlotHours, freeSlotsForDay, useApp } from "../state/AppState";
 import { BookingModal } from "./BookingModal";
 import { DateStrip } from "./DateStrip";
 import { FiltersBar, FiltersSheet, activeFilterCount } from "./FiltersPanel";
@@ -21,14 +21,14 @@ function defaultFilters(): Filters {
     city: "",
     district: "",
     type: "",
-    date: toISODate(new Date()),
+    date: minskDate(),
     from: 14,
     to: 21,
   };
 }
 
 export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
-  const { slots, listings } = useApp();
+  const { slotsByDate, listings } = useApp();
   const { language, t } = useLanguage();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [selected, setSelected] = useState<BookingRequest[]>([]);
@@ -37,8 +37,9 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
   const [detailsId, setDetailsId] = useState<number | null>(null);
   const closeDetails = useCallback(() => setDetailsId(null), []);
 
-  const days = useMemo(() => nextDays(7).map(toISODate), []);
-  const today = days[0];
+  const today = minskDate();
+  const days = useMemo(() => nextDays(7, today), [today]);
+  const date = days.includes(filters.date) ? filters.date : today;
   const from = filters.from;
   const to = filters.to;
 
@@ -53,25 +54,26 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
   }, [byLocation, filters.school, filters.type]);
 
   const results = useMemo(() => {
+    const day = slotsByDate.get(date);
     return matching
       .map((listing) => ({
         listing,
-        free: freeSlots(slots, listing.id, filters.date, from, to),
+        free: freeSlotsForDay(day?.get(listing.id) ?? [], from, to),
       }))
         .filter((row) => row.free.length > 0);
-  }, [matching, slots, filters.date, from, to]);
+  }, [matching, slotsByDate, date, from, to]);
 
   const counts = useMemo(() => {
     const result: Record<string, number> = {};
     for (const date of days) {
+      const day = slotsByDate.get(date);
       result[date] = matching.reduce(
-          (sum, listing) =>
-            sum + freeSlotHours(freeSlots(slots, listing.id, date, from, to)),
-          0,
-        );
+        (sum, listing) => sum + freeSlotHours(day?.get(listing.id) ?? [], from, to),
+        0,
+      );
     }
     return result;
-  }, [days, matching, slots, from, to]);
+  }, [days, matching, slotsByDate, from, to]);
 
   const catalogSchools = useMemo(
     () => [...new Set(byLocation.map((listing) => listing.school))].sort((a, b) => a.localeCompare(b, "ru")),
@@ -95,10 +97,13 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
     0,
   );
 
-  const freeToday = freeHourCount(slots, today);
+  const freeToday = useMemo(() => [...(slotsByDate.get(today)?.values() ?? [])].reduce(
+    (sum, daySlots) => sum + freeSlotHours(daySlots, 14, 21),
+    0,
+  ), [slotsByDate, today]);
   const filterCount = activeFilterCount(filters);
   const nextAvailableDay = days.find(
-    (date) => date !== filters.date && (counts[date] ?? 0) > 0,
+    (candidate) => candidate !== date && (counts[candidate] ?? 0) > 0,
   );
 
   const patchFilters = (patch: Partial<Filters>) => {
@@ -108,18 +113,19 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
   };
 
   const resetFilters = () => {
-    setFilters({ ...defaultFilters(), date: filters.date });
+    setFilters({ ...defaultFilters(), date });
     setSelected([]);
   };
 
   const changeRange = (listingId: number, startTime: string, endTime: string) => {
     setSelected((prev) => [
       ...prev.filter((item) => item.listingId !== listingId),
-      { listingId, date: filters.date, startTime, endTime },
+      { listingId, date, startTime, endTime },
     ]);
   };
   const selectionValid = selected.every((request) =>
-    isRangeAvailable(slots, request.listingId, request.date, request.startTime, request.endTime),
+    request.date === date &&
+    isDayRangeAvailable(slotsByDate.get(request.date)?.get(request.listingId) ?? [], request.startTime, request.endTime),
   );
 
   return (
@@ -166,7 +172,7 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
 
           <DateStrip
             days={days}
-            active={filters.date}
+            active={date}
             counts={counts}
             onSelect={(date) => patchFilters({ date })}
           />
@@ -231,7 +237,7 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
         return detail ? (
           <ListingDetailsDialog
             listing={detail.listing}
-            date={filters.date}
+            date={date}
             availability={detail.free}
             selected={selected.find((request) => request.listingId === detail.listing.id)}
             onRangeChange={(start, end) => changeRange(detail.listing.id, start, end)}

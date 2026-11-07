@@ -1,13 +1,20 @@
 """Contract integration tests with an isolated in-memory DB (no live data)."""
 import datetime
+import os
+import secrets
 import unittest
+from decimal import Decimal
 from io import BytesIO
 from unittest.mock import patch
 
+import jwt
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+os.environ.setdefault("JWT_SECRET_KEY", secrets.token_hex(32))
 
 from db.database import Base, get_db
 from main import app
@@ -185,20 +192,65 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_captcha_is_required_one_use_and_expires(self):
         url = "/api/v1/auth/register"
         account = {"name": "Тест", "phone": "+375291234567", "password": "TestPassword123"}
-        self.assertEqual((await self.client.post(url, json=account)).status_code, 422)
+        missing = await self.client.post(url, json=account)
+        self.assertEqual(missing.status_code, 422)
+        self.assertNotIn(account["password"], missing.text)
+        self.assertNotIn(account["phone"], missing.text)
+        self.assertTrue(all(set(error) == {"type", "loc", "msg"} for error in missing.json()["detail"]))
         captcha = await self.captcha_payload()
         for answer in ("12345", "44444"):
             result = await self.client.post(url, json={**account, **captcha, "captcha_answer": answer})
             self.assertEqual(result.status_code, 400)
-        with patch("core.captcha.monotonic", return_value=10):
+        with patch("core.captcha.time", return_value=10):
             captcha = await self.captcha_payload()
-        with patch("core.captcha.monotonic", return_value=191):
+        with patch("core.captcha.time", return_value=191):
             self.assertEqual((await self.client.post(url, json={**account, **captcha})).status_code, 400)
         captcha = await self.captcha_payload()
         self.assertEqual((await self.client.post(url, json={**account, **captcha})).status_code, 201)
         self.assertEqual((await self.client.post(url, json={
             **account, **captcha, "phone": "+375291234568",
         })).status_code, 400)
+
+    async def test_auth_logout_revokes_current_session_and_requires_expiration(self):
+        user, first = await self.register()
+        credentials = {"phone": user["phone"], "password": "TestPassword123"}
+        login = await self.client.post("/api/v1/auth/login", json=credentials)
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(login.headers["cache-control"], "no-store")
+        second = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        for _ in range(2):
+            logout = await self.client.post("/api/v1/auth/logout", headers=first)
+            self.assertEqual(logout.status_code, 204)
+        self.assertEqual((await self.client.get("/api/v1/auth/me", headers=first)).status_code, 401)
+        self.assertEqual((await self.client.get("/api/v1/auth/me", headers=second)).status_code, 200)
+        for expiration in ({}, {"exp": datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)}):
+            token = jwt.encode({"sub": user["user_id"], "jti": secrets.token_hex(16), **expiration},
+                               settings.JWT_SECRET_KEY, algorithm="HS256")
+            expired = await self.client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+            self.assertEqual(expired.status_code, 401)
+
+    async def test_auth_limits_return_retry_after_and_reset(self):
+        request = {"phone": "+375299999999", "password": "SyntheticPassword"}
+        with patch("core.auth_state.time", return_value=121):
+            for _ in range(20):
+                self.assertEqual((await self.client.post("/api/v1/auth/login", json=request)).status_code, 401)
+            limited = await self.client.post("/api/v1/auth/login", json=request)
+            self.assertEqual(limited.status_code, 429)
+            self.assertEqual(limited.headers["retry-after"], "59")
+            self.assertEqual((await self.client.get("/api/v1/auth/captcha")).status_code, 200)
+        with patch("core.auth_state.time", return_value=180):
+            self.assertEqual((await self.client.post("/api/v1/auth/login", json=request)).status_code, 401)
+
+    async def test_streamed_body_limit_returns_413(self):
+        async def body():
+            yield b'{"name":"'
+            yield b"a" * 64
+            yield b'"}'
+
+        with patch("api.request_limits.MAX_API_BODY_BYTES", 32):
+            oversized = await self.client.post("/api/v1/auth/register", content=body(),
+                                               headers={"Content-Type": "application/json"})
+        self.assertEqual(oversized.status_code, 413)
 
     async def test_catalog_matches_daily_availability_and_validates_range(self):
         today = minsk_now().date()
@@ -216,6 +268,52 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
             daily = await self.client.get("/api/v1/rooms/available", params={"date": day, "type_room": "sport_hall"})
             self.assertEqual([room for room in catalog if room["date"] == day], daily.json())
         self.assertTrue(all(room["city"] == "Минск" and room["city_district"] for room in catalog))
+
+    async def test_compact_catalog_expands_to_legacy_slots_and_filters_before_paging(self):
+        start = minsk_now().date() + datetime.timedelta(days=1)
+        params = {"start": start, "days": 2}
+        url = "/api/v1/rooms/catalog"
+        with patch.object(settings, "UO_DEMO_ENABLED", True):
+            legacy = await self.client.get(url, params=params)
+            compact = await self.client.get(url, params={**params, "compact": "true"})
+            filtered = await self.client.get(url, params={
+                **params, "compact": "true", "city": "Минск", "city_district": "Октябрьский",
+                "type_room": "sport_hall", "limit": 1,
+            })
+            second = await self.client.get(url, params={**params, "compact": "true", "offset": 1, "limit": 1})
+        for response in (legacy, compact, filtered, second):
+            self.assertEqual(response.status_code, 200, response.text)
+        expanded = []
+        for listing in compact.json()["listings"]:
+            for day in listing["availability"]:
+                date = datetime.date.fromisoformat(day["date"])
+                slots = []
+                for interval in day["ranges"]:
+                    cursor = datetime.datetime.combine(date, datetime.time.fromisoformat(interval["start_time"]))
+                    while cursor.time() < datetime.time.fromisoformat(interval["end_time"]):
+                        end = cursor + datetime.timedelta(minutes=15)
+                        slots.append({"start_time": cursor.time().isoformat(), "end_time": end.time().isoformat(),
+                                      "price": str(Decimal(listing["price"]) / 4)})
+                        cursor = end
+                expanded.append({**{key: val for key, val in listing.items() if key != "availability"},
+                                 "date": day["date"], "available_slots": slots})
+        self.assertEqual(sorted(expanded, key=lambda room: (room["date"], room["id"])), legacy.json())
+        self.assertEqual(compact.json()["total"], 2)
+        self.assertLess(len(compact.content), len(legacy.content))
+        self.assertEqual(filtered.json()["total"], 1)
+        self.assertEqual(filtered.json()["listings"][0]["city_district"], "Октябрьский")
+        self.assertEqual(second.json(), {"total": 2, "listings": compact.json()["listings"][1:]})
+
+    async def test_database_readiness_is_separate_from_liveness(self):
+        response = await self.client.get("/ready")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ready"})
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        with patch.object(AsyncSession, "execute", side_effect=OperationalError(None, None, RuntimeError("offline"))):
+            unavailable = await self.client.get("/ready")
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertEqual(unavailable.json(), {"status": "unavailable"})
+            self.assertEqual((await self.client.get("/health")).status_code, 200)
 
     async def test_catalog_does_not_offer_elapsed_or_partial_slots(self):
         now = datetime.datetime(2026, 11, 7, 16)
@@ -275,8 +373,13 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled.status_code, 200, cancelled.text)
         rebooked = await self.submit_booking(payload, headers)
         self.assertEqual(rebooked.status_code, 201, rebooked.text)
+        upcoming = await self.client.get(history_url, headers=headers, params={"upcoming": True, "limit": 1})
+        history = await self.client.get(history_url, headers=headers, params={"upcoming": False, "limit": 1})
+        self.assertEqual([(item["id"], item["state"]) for item in upcoming.json()], [(rebooked.json()[0]["id"], "confirmed")])
+        self.assertEqual([(item["id"], item["state"]) for item in history.json()], [(booking["id"], "cancelled")])
+        self.assertEqual((await self.client.get(history_url, headers=headers, params={"offset": 2})).json(), [])
 
-    async def test_booking_creation_issues_qr_and_guard_checks_booking_date(self):
+    async def test_booking_creation_issues_qr_and_guard_checks_booking_window(self):
         user, headers = await self.register()
         other_user, other_headers = await self.register("+375291234569")
         today = minsk_now().date()
@@ -319,7 +422,18 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
             row = await db.get(Booking, booking["id"])
             row.date = today
             await db.commit()
-        valid_today = await self.client.post(scan_url, json={"code": booking["code"]})
+        updated = await self.client.patch("/api/v1/auth/me", headers=headers, json={
+            "first_name": "Новое имя", "surname": "Тестовый", "phone": "+375291234579",
+        })
+        self.assertEqual(updated.status_code, 200, updated.text)
+        for hour, minute in ((13, 59), (15, 0)):
+            moment = datetime.datetime.combine(today, datetime.time(hour, minute))
+            with patch("api.routers.guard.minsk_now", return_value=moment):
+                outside = await self.client.post(scan_url, json={"code": booking["code"]})
+            self.assertFalse(outside.json()["access_granted"])
+            self.assertEqual(outside.json()["user"], {"name": "", "phone": ""})
+        with patch("api.routers.guard.minsk_now", return_value=datetime.datetime.combine(today, datetime.time(14))):
+            valid_today = await self.client.post(scan_url, json={"code": booking["code"]})
         self.assertEqual(valid_today.status_code, 200, valid_today.text)
         self.assertTrue(valid_today.json()["access_granted"])
         self.assertEqual(valid_today.json()["user"], {"name": user["name"], "phone": user["phone"]})
@@ -429,6 +543,13 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         week = await self.client.get("/api/v1/rooms/catalog", params={"start": next_week, "days": 2})
         self.assertEqual(week.status_code, 200, week.text)
         self.assertEqual([len(room["available_slots"]) for room in week.json() if room["id"] == listing["id"]], [24, 28])
+        compact = await self.client.get("/api/v1/rooms/catalog", params={"start": next_week, "days": 2, "compact": True})
+        self.assertEqual(compact.status_code, 200, compact.text)
+        ranges = next(room for room in compact.json()["listings"] if room["id"] == listing["id"])["availability"]
+        self.assertEqual(ranges[0]["ranges"], [
+            {"start_time": "14:00:00", "end_time": "16:00:00"},
+            {"start_time": "17:00:00", "end_time": "21:00:00"},
+        ])
         self.assertEqual((await self.submit_booking(order, tenant_headers)).status_code, 409)
         cancel_url = f"{url}/{created.json()['id']}/cancel"
         self.assertEqual((await self.client.patch(cancel_url, headers=other_headers)).status_code, 404)
@@ -512,12 +633,74 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         school_headers = {"Authorization": f"Bearer {create_access_token('school')}"}
         self.assertEqual((await self.client.post(url, headers=headers, json={"phone": alternate})).status_code, 403)
         self.assertEqual((await self.client.post(url, headers=school_headers, json={"phone": "8 (029)"})).json(), [])
+        self.assertEqual((await self.client.post(url, headers=school_headers, json={"phone": "8 (029) 123-4"})).json(), [])
+        async with self.sessions() as db:
+            listing = await db.scalar(select(RoomListing).where(RoomListing.school == "ГУО «Средняя школа № 1 г. Минска»"))
+            listing.owner_id = "school"
+            db.add(Booking(
+                listing_id=listing.id, school=listing.school, room=listing.room, type_room=listing.type_room,
+                date=minsk_now().date() - datetime.timedelta(days=1), start_time=datetime.time(16),
+                end_time=datetime.time(17), price=45, state="completed", user_id=tenant["user_id"],
+            ))
+            await db.commit()
         suggestions = (await self.client.post(url, headers=school_headers, json={"phone": "8 (029) 123-4"})).json()
-        self.assertEqual({item["user_id"] for item in suggestions}, {tenant["user_id"], "legacy"})
+        self.assertEqual({item["user_id"] for item in suggestions}, {tenant["user_id"]})
         self.assertTrue(all(set(item) == {"phone", "name", "user_id"} and item["phone"] == phone for item in suggestions))
         for raw, expected in ((phone, tenant["user_id"]), (alternate, "legacy")):
             result = await self.client.post("/api/v1/auth/login", json={"phone": raw, "password": "TestPassword123"})
             self.assertEqual(result.json()["user"]["user_id"], expected)
+
+    async def test_privacy_export_is_scoped_and_erasure_request_is_idempotent(self):
+        tenant, headers = await self.register()
+        _, other_headers = await self.register("+375291234569")
+        url = "/api/v1/privacy/export"
+        self.assertEqual((await self.client.get(url)).status_code, 401)
+        day = minsk_now().date() + datetime.timedelta(days=1)
+        room = (await self.client.get("/api/v1/rooms/available", params={"date": day, "type_room": "sport_hall"})).json()[0]
+        booking = await self.submit_booking({
+            "school": room["school"], "room": room["room"], "type_room": room["type_room"], "date": day.isoformat(),
+            "start_time": "16:00", "hours": 1, "user_id": tenant["user_id"],
+        }, headers)
+        self.assertEqual(booking.status_code, 201, booking.text)
+        export = await self.client.get(url, headers=headers)
+        self.assertEqual(export.status_code, 200, export.text)
+        self.assertEqual(export.headers["cache-control"], "no-store")
+        self.assertEqual(export.json()["profile"]["user_id"], tenant["user_id"])
+        self.assertNotIn("password_hash", export.json()["profile"])
+        self.assertEqual(export.json()["orders"][0]["id"], booking.json()[0]["id"])
+        self.assertNotIn("code", export.json()["orders"][0])
+        self.assertEqual((await self.client.get(url, headers=other_headers)).json()["orders"], [])
+        request_url = "/api/v1/privacy/erasure-request"
+        first = await self.client.post(request_url, headers=headers)
+        second = await self.client.post(request_url, headers=headers)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.json(), first.json())
+        self.assertEqual((await self.client.get(url, headers=headers)).json()["erasure_requested_at"], first.json()["requested_at"])
+
+    async def test_tenant_booking_horizon_and_upcoming_quota(self):
+        tenant, headers = await self.register()
+        today = minsk_now().date()
+        day = today + datetime.timedelta(days=2)
+        room = (await self.client.get("/api/v1/rooms/available", params={"date": day, "type_room": "sport_hall"})).json()[0]
+        payload = {
+            "school": room["school"], "room": room["room"], "type_room": room["type_room"], "date": day.isoformat(),
+            "start_time": "16:00", "hours": 1, "user_id": tenant["user_id"],
+        }
+        far_ahead = await self.client.post("/api/v1/bookings/agreement", headers=headers, json={
+            **payload, "date": (today + datetime.timedelta(days=31)).isoformat(),
+        })
+        self.assertEqual(far_ahead.status_code, 422)
+        async with self.sessions() as db:
+            db.add_all([
+                Booking(listing_id=room["id"], school=room["school"], room=room["room"], type_room=room["type_room"],
+                        date=day + datetime.timedelta(days=offset), start_time=datetime.time(16), end_time=datetime.time(17),
+                        price=45, state="confirmed", user_id=tenant["user_id"])
+                for offset in range(1, 11)
+            ])
+            await db.commit()
+        limited = await self.submit_booking(payload, headers)
+        self.assertEqual(limited.status_code, 409, limited.text)
+        self.assertIn("10", limited.json()["detail"])
 
     async def test_series_end_date_and_school_booking_cancellation(self):
         school = "ГУО «Средняя школа № 1 г. Минска»"
@@ -721,7 +904,10 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(first_url, second_url)
         photo = await self.client.get(second_url)
         self.assertEqual(photo.headers["content-type"], "image/webp")
-        self.assertEqual(photo.content, webp)
+        self.assertEqual(photo.headers["x-content-type-options"], "nosniff")
+        with Image.open(BytesIO(photo.content)) as image:
+            self.assertEqual(image.format, "WEBP")
+            self.assertEqual(image.size, (2, 2))
 
         available = await self.client.get("/api/v1/rooms/available", params={
             "date": minsk_now().date().isoformat(), "type_room": "sport_hall",
@@ -745,6 +931,44 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
             "school": school, "type_room": "sport_hall", "room": "Спортзал № 1",
         }, files={"file": ("room.jpg", b"\xff\xd8\xff" + b"0" * room_photos.MAX_PHOTO_BYTES, "image/jpeg")})
         self.assertEqual(too_large.status_code, 413)
+
+    async def test_room_photos_remove_metadata_and_preserve_orientation(self):
+        school = "ГУО «Средняя школа № 1 г. Минска»"
+        metadata = Image.Exif()
+        metadata[270] = "Synthetic metadata"
+        metadata[274] = 6
+        buffer = BytesIO()
+        Image.new("RGB", (2, 3), "blue").save(buffer, format="JPEG", exif=metadata)
+        original = buffer.getvalue()
+        async with self.sessions() as db:
+            db.add(User(user_id="photo-owner", name=school, phone="", role="master"))
+            await db.flush()
+            listing = await db.scalar(select(RoomListing).where(RoomListing.school == school))
+            listing.owner_id = "photo-owner"
+            listing.photo_data = original
+            listing.photo_type = "image/jpeg"
+            listing_id = listing.id
+            await db.commit()
+
+        legacy = await self.client.get(f"/media/catalog/{listing_id}")
+        self.assertEqual(legacy.status_code, 200)
+        with Image.open(BytesIO(legacy.content)) as image:
+            self.assertEqual(image.size, (3, 2))
+            self.assertFalse(image.getexif())
+
+        headers = {"Authorization": f"Bearer {create_access_token('photo-owner')}"}
+        uploaded = await self.client.post("/api/v1/rooms/photo", headers=headers, data={
+            "school": school, "type_room": "sport_hall", "room": "Спортзал № 1", "listing_id": listing_id,
+        }, files={"file": ("room.jpg", original, "image/jpeg")})
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        async with self.sessions() as db:
+            stored = (await db.execute(select(RoomListing.photo_data, RoomListing.photo_sanitized).where(
+                RoomListing.id == listing_id,
+            ))).one()
+        self.assertTrue(stored.photo_sanitized)
+        with Image.open(BytesIO(stored.photo_data)) as image:
+            self.assertEqual(image.size, (3, 2))
+            self.assertFalse(image.getexif())
 
     async def test_uo_can_create_persistent_room_and_clients_can_book_it(self):
         old_enabled = settings.UO_DEMO_ENABLED
@@ -944,6 +1168,17 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         booked = await self.submit_booking(order, tenant_headers)
         self.assertEqual(booked.status_code, 201, booked.text)
         booking_id = booked.json()[0]["id"]
+        summary_url = "/api/v1/uo/bookings/summary"
+        summary = await self.client.get(summary_url, headers=owner_headers)
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json()["total_hours"], 1)
+        self.assertEqual(Decimal(summary.json()["total_revenue"]), Decimal(booked.json()[0]["price"]))
+        self.assertEqual(summary.json()["listings"], [{"listing_id": room["id"], "count": 1, "has_active_bookings": True}])
+        self.assertEqual((await self.client.get(summary_url, headers=tenant_headers)).status_code, 403)
+        active = await self.client.get("/api/v1/uo/bookings", headers=owner_headers, params={"upcoming": True})
+        history = await self.client.get("/api/v1/uo/bookings", headers=owner_headers, params={"upcoming": False, "limit": 1})
+        self.assertEqual([item["id"] for item in active.json()], [booking_id])
+        self.assertEqual(history.json(), [])
         blocked_update = await self.client.patch(url, headers=owner_headers, data={**fields, "price": "72"})
         self.assertEqual(blocked_update.status_code, 409, blocked_update.text)
         blocked_archive = await self.client.delete(url, headers=owner_headers)
@@ -988,6 +1223,13 @@ class ApiContractTests(unittest.IsolatedAsyncioTestCase):
         persisted_school_history = await self.client.get("/api/v1/uo/bookings", headers=owner_headers)
         self.assertEqual(persisted_school_history.status_code, 200, persisted_school_history.text)
         self.assertEqual(persisted_school_history.json(), school_history.json())
+        summary = await self.client.get(summary_url, headers=owner_headers)
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json(), {"total": 1, "total_hours": 0, "total_revenue": "0", "listings": [
+            {"listing_id": room["id"], "count": 1, "has_active_bookings": False},
+        ]})
+        history = await self.client.get("/api/v1/uo/bookings", headers=owner_headers, params={"upcoming": False, "limit": 1})
+        self.assertEqual([(item["id"], item["state"]) for item in history.json()], [(booking_id, "cancelled")])
         stale_booking = await self.submit_booking({**order, "listing_id": room["id"]}, tenant_headers)
         self.assertEqual(stale_booking.status_code, 404, stale_booking.text)
         new_booking = await self.submit_booking({**order, "listing_id": recreated.json()["id"]}, tenant_headers)

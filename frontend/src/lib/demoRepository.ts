@@ -1,5 +1,5 @@
 import { authenticate, authenticateLocalAccount, hasLocalAccount, registerLocalAccount, updateLocalProfile } from "./auth";
-import { LISTINGS, addDays, buildSlots, toISODate } from "./data";
+import { LISTINGS, buildSlots } from "./data";
 import {
   RepositoryError,
   type AppRepository,
@@ -12,7 +12,7 @@ import {
   type UpdateListingInput,
 } from "./repository";
 import type { Booking, GuardScanResult, Listing, Slot, User } from "./types";
-import { intervalPrice, minskBookingTime } from "./format";
+import { addCalendarDays, intervalPrice, minskBookingTime, minskDate } from "./format";
 import { isRangeAvailable, isValidAvailabilityWindow } from "./intervals";
 
 interface DemoBookingSpec {
@@ -66,12 +66,13 @@ function nextBookingNumber(bookings: Booking[]): number {
 function buildDemoSnapshot(): AppSnapshot {
   let slots = buildSlots(LISTINGS);
   const bookings: Booking[] = [];
+  const today = minskDate();
 
   for (const [index, spec] of DEMO_UO_BOOKINGS.entries()) {
     const listing = LISTINGS.find((item) => item.id === spec.listingId);
     if (!listing) continue;
 
-    const date = toISODate(addDays(new Date(), spec.dayOffset));
+    const date = addCalendarDays(today, spec.dayOffset);
     const startHour = Number(spec.startTime.slice(0, 2));
     const endTime = `${String(startHour + spec.hours).padStart(2, "0")}:00`;
     const chosen = slots
@@ -204,8 +205,8 @@ export class DemoRepository implements AppRepository {
     );
     if (!booking) throw new RepositoryError("Бронирование не найдено или недоступно.");
 
-    const startsAt = new Date(`${booking.date}T${booking.startTime}:00`);
-    if (startsAt.getTime() - Date.now() < 2 * 60 * 60 * 1000) {
+    const startsAt = minskBookingTime(booking.date, booking.startTime);
+    if (startsAt - Date.now() < 2 * 60 * 60 * 1000) {
       throw new RepositoryError("Отменить бронирование можно не позднее чем за 2 часа до начала.", "CANCELLATION_CUTOFF");
     }
 
@@ -222,7 +223,7 @@ export class DemoRepository implements AppRepository {
   async scanQr(code: string): Promise<GuardScanResult> {
     const booking = this.snapshot.bookings.find((item) => item.code === code);
     if (!booking) throw new RepositoryError("QR-пропуск не зарегистрирован.", "404");
-    const accessGranted = booking.state === "confirmed" && booking.date === toISODate(new Date());
+    const accessGranted = booking.state === "confirmed" && booking.date === minskDate();
     return {
       accessGranted,
       reason: accessGranted ? "Допуск разрешен: бесплатная бронь подтверждена и действует сегодня." : "Допуск запрещен: бронь не подтверждена или действует не сегодня.",

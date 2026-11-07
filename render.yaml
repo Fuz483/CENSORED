@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: plyacouka-demo
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: codex/render-demo
+    autoDeployTrigger: "off"
+    dockerfilePath: ./Dockerfile.render
+    healthCheckPath: /ready
+    envVars:
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: UO_DEMO_PASSWORD
+        generateValue: true
+      - key: UO_DEMO_ENABLED
+        value: "true"
+      - key: CORS_ORIGINS
+        value: "[]"
+      - key: POSTGRES_HOST
+        fromDatabase: { name: plyacouka-demo-db, property: host }
+      - key: POSTGRES_PORT
+        fromDatabase: { name: plyacouka-demo-db, property: port }
+      - key: POSTGRES_DB
+        fromDatabase: { name: plyacouka-demo-db, property: database }
+      - key: POSTGRES_USER
+        fromDatabase: { name: plyacouka-demo-db, property: user }
+      - key: POSTGRES_PASSWORD
+        fromDatabase: { name: plyacouka-demo-db, property: password }
+
+databases:
+  - name: plyacouka-demo-db
+    plan: free
+    region: frankfurt
+    postgresMajorVersion: "15"
+    ipAllowList: []

@@ -28,8 +28,10 @@ export function ListingDetailsDialog({
   const dialogRef = useDialog(onClose);
   const address = listing.address.trim();
   const addressKnown = Boolean(address) && address.toLowerCase() !== "адрес уточняется";
+  const city = listing.city && !address.toLowerCase().includes(listing.city.toLowerCase()) ? listing.city : null;
+  const mapQuery = ["Беларусь", city, address].filter(Boolean).join(", ");
   const mapUrl = addressKnown
-    ? `https://www.openstreetmap.org/search?query=${encodeURIComponent(address)}`
+    ? `https://yandex.ru/maps/?text=${encodeURIComponent(mapQuery)}`
     : undefined;
   const meta = ROOM_TYPES[listing.type];
 
@@ -109,7 +111,7 @@ export function ListingDetailsDialog({
                       rel="noreferrer"
                       className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-base font-semibold text-blue underline underline-offset-4"
                     >
-                      {t("Открыть на карте")}
+                      {t("Открыть в Яндекс Картах")}
                       <ArrowUpRight className="size-4 shrink-0" aria-hidden="true" />
                     </a>
                   )}

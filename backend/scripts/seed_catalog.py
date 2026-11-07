@@ -3,16 +3,17 @@ import asyncio
 from datetime import time
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
-from api.routers.room_photos import IMAGE_TYPES, assign_photo
+from api.routers.room_photos import IMAGE_EXTENSIONS, assign_photo, read_legacy_photo, sanitize_photo
 from db.database import AsyncSessionLocal
 from db.models import RoomListing
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "frontend" / "public" / "photos"
-LEGACY_PHOTOS = ROOT / "backend" / "uploads" / "room-photos"
 
 EXISTING = {
     ("ГУО «Средняя школа № 1 г. Минска»", "Спортзал № 1"): "gym-01.jpg",
@@ -61,18 +62,26 @@ RATES = {"sport_hall": 45, "assembly_hall": 60, "it_lab": 35, "workshop": 30, "p
 
 def import_existing_photo(listing: RoomListing) -> bool:
     if (listing.image_url or "").startswith("/media/rooms/"):
-        source = LEGACY_PHOTOS / Path(listing.image_url).name
-        if source.is_file():
-            contents = source.read_bytes()
-            for content_type, check in IMAGE_TYPES.items():
-                if check(contents):
-                    assign_photo(listing, contents, content_type)
-                    return True
+        source = Path(urlsplit(listing.image_url).path)
+        content_type = IMAGE_EXTENSIONS.get(source.suffix.lower())
+        if content_type is not None:
+            try:
+                contents = read_legacy_photo(source.name, content_type)
+            except HTTPException:
+                pass
+            else:
+                assign_photo(listing, contents, content_type)
+                return True
     asset = EXISTING.get((listing.school, listing.room))
     if asset:
-        assign_photo(listing, (ASSETS / asset).read_bytes(), "image/jpeg")
+        assign_demo_photo(listing, asset)
         return True
     return False
+
+
+def assign_demo_photo(listing: RoomListing, asset: str) -> None:
+    contents = sanitize_photo((ASSETS / asset).read_bytes(), "image/jpeg")
+    assign_photo(listing, contents, "image/jpeg")
 
 
 async def seed_catalog() -> None:
@@ -100,7 +109,7 @@ async def seed_catalog() -> None:
                     await db.flush()
                     added += 1
                 if listing.photo_type is None:
-                    assign_photo(listing, (ASSETS / image).read_bytes(), "image/jpeg")
+                    assign_demo_photo(listing, image)
         await db.commit()
     print(f"Added {added} demo listings. Stored {imported} images for existing listings.")
 

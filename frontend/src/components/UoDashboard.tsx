@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Archive, CalendarPlus, ImagePlus, LoaderCircle, Pencil, Plus } from "lucide-react";
 
 import { useDialog } from "../hooks/useDialog";
-import { ROOM_TYPES, toISODate } from "../lib/data";
+import { ROOM_TYPES } from "../lib/data";
 import {
   dayNumber,
   durationLabel,
@@ -10,14 +10,16 @@ import {
   intervalLabel,
   longDate,
   minskBookingTime,
+  minskDate,
   money,
   monthShort,
   weekdayShort,
 } from "../lib/format";
-import { errorMessage } from "../lib/repository";
+import { errorMessage, type UoBookingSummary } from "../lib/repository";
 import type { Booking, BookingSource, Listing } from "../lib/types";
 import { freeSlotHours, useApp } from "../state/AppState";
 import { AddSpaceDialog } from "./AddSpaceDialog";
+import { BookingHistoryMore } from "./BookingHistoryMore";
 import { ManualBookingDialog } from "./ManualBookingDialog";
 import { WeeklyReservations } from "./WeeklyReservations";
 import { useLanguage } from "../lib/i18n";
@@ -27,7 +29,7 @@ type BookingFilter = "all" | BookingSource;
 const MANUAL_BOOKING_ENABLED = false;
 
 export function UoDashboard() {
-  const { user, listings, slots, bookings, weeklyReservations, deleteListing, uploadRoomPhoto, cancelBooking, reload } = useApp();
+  const { user, listings, slotsByDate, bookings, uoBookingSummary, weeklyReservations, deleteListing, uploadRoomPhoto, cancelBooking, reload } = useApp();
   const { t } = useLanguage();
   const [tab, setTab] = useState<Tab>("spaces");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
@@ -68,27 +70,27 @@ export function UoDashboard() {
   if (!user) return null;
 
   const ownListings = listings.filter((listing) => listing.ownerId === user.user_id);
-  const ownBookings = [...bookings]
+  const ownBookings = uoBookingSummary ? bookings : [...bookings]
     .sort(
       (a, b) =>
         a.date.localeCompare(b.date) ||
         a.startTime.localeCompare(b.startTime),
     );
-  const clientBookings = ownBookings.filter((booking) => booking.source === "client");
-  const manualBookings = ownBookings.filter((booking) => booking.source === "uo");
   const activeBookings = ownBookings.filter((booking) => booking.state !== "cancelled");
-  const totalHours = activeBookings.reduce((sum, booking) => sum + intervalHours(booking.startTime, booking.endTime), 0);
-  const totalRevenue = activeBookings.reduce((sum, booking) => sum + booking.total, 0);
-  const today = toISODate(new Date());
+  const totalCount = uoBookingSummary?.total ?? ownBookings.length;
+  const clientCount = uoBookingSummary?.total ?? ownBookings.filter((booking) => booking.source === "client").length;
+  const totalHours = uoBookingSummary?.totalHours ?? activeBookings.reduce((sum, booking) => sum + intervalHours(booking.startTime, booking.endTime), 0);
+  const totalRevenue = uoBookingSummary?.totalRevenue ?? activeBookings.reduce((sum, booking) => sum + booking.total, 0);
+  const today = minskDate();
 
   const visibleBookings = ownBookings.filter(
     (booking) => bookingFilter === "all" || booking.source === bookingFilter,
   );
 
   const filterCounts: Record<BookingFilter, number> = {
-    all: ownBookings.length,
-    client: clientBookings.length,
-    uo: manualBookings.length,
+    all: totalCount,
+    client: clientCount,
+    uo: ownBookings.filter((booking) => booking.source === "uo").length,
   };
 
   const savedSpace = (listing: { room: string }) => {
@@ -170,7 +172,7 @@ export function UoDashboard() {
         />
         <Stat
           label={t("брони клиентов")}
-          value={String(clientBookings.length).padStart(2, "0")}
+          value={String(clientCount).padStart(2, "0")}
         />
         <Stat
           label={t("часов занято")}
@@ -191,7 +193,7 @@ export function UoDashboard() {
           <TabButton
             active={tab === "bookings"}
             onClick={() => setTab("bookings")}
-            count={ownBookings.length}
+            count={totalCount}
           >
             {t("Брони")}
           </TabButton>
@@ -235,8 +237,9 @@ export function UoDashboard() {
       {tab === "spaces" ? (
         <SpacesTab
           listings={ownListings}
-          slots={slots}
+          slotsByDate={slotsByDate}
           bookings={ownBookings}
+          bookingSummary={uoBookingSummary}
           onAdd={() => { setEditingListing(undefined); setSpaceOpen(true); }}
           onEdit={(listing) => { setEditingListing(listing); setSpaceOpen(true); }}
           onArchive={(listing) => { setNotice(null); setArchiveTarget(listing); }}
@@ -248,7 +251,7 @@ export function UoDashboard() {
         <BookingsTab
           bookings={visibleBookings}
           institutionName={user.name}
-          allCount={ownBookings.length}
+          allCount={totalCount}
           filter={bookingFilter}
           filterCounts={filterCounts}
           onFilter={setBookingFilter}
@@ -335,16 +338,18 @@ function TabButton({
 
 function SpacesTab({
   listings,
-  slots,
+  slotsByDate,
   bookings,
+  bookingSummary,
   onAdd,
   onEdit,
   onArchive,
   onChangePhoto,
 }: {
   listings: ReturnType<typeof useApp>["listings"];
-  slots: ReturnType<typeof useApp>["slots"];
+  slotsByDate: ReturnType<typeof useApp>["slotsByDate"];
   bookings: Booking[];
+  bookingSummary: UoBookingSummary | null;
   onAdd: () => void;
   onEdit: (listing: Listing) => void;
   onArchive: (listing: Listing) => void;
@@ -352,6 +357,20 @@ function SpacesTab({
 }) {
   const { t } = useLanguage();
   const now = Date.now();
+  const summariesByListing = useMemo(() => new Map(bookingSummary?.listings.map(
+    (summary) => [summary.listingId, summary],
+  )), [bookingSummary]);
+  const freeHoursByListing = useMemo(() => {
+    const result = new Map<number, number>();
+    for (const listing of listings) {
+      let hours = 0;
+      for (const day of slotsByDate.values()) {
+        hours += freeSlotHours(day.get(listing.id) ?? []);
+      }
+      result.set(listing.id, hours);
+    }
+    return result;
+  }, [listings, slotsByDate]);
   if (listings.length === 0) {
     return (
       <div className="space-card mt-4 p-5 sm:p-7">
@@ -375,13 +394,12 @@ function SpacesTab({
 
       <div className="grid gap-4">
         {listings.map((listing) => {
-          const free = freeSlotHours(slots.filter(
-            (slot) => slot.listingId === listing.id && slot.state === 0,
-          ));
-          const upcoming = bookings.filter(
+          const free = freeHoursByListing.get(listing.id) ?? 0;
+          const summary = summariesByListing.get(listing.id);
+          const bookingCount = summary?.count ?? bookings.filter(
             (booking) => booking.listing.id === listing.id,
           ).length;
-          const hasActiveBookings = bookings.some(
+          const hasActiveBookings = summary?.hasActiveBookings || bookings.some(
             (booking) => booking.listing.id === listing.id &&
               booking.state !== "cancelled" && booking.state !== "completed" &&
               minskBookingTime(booking.date, booking.endTime) > now,
@@ -414,7 +432,7 @@ function SpacesTab({
                   </div>
                   <div>
                     <dt className="text-sm text-ink-soft">{t("Броней")}</dt>
-                    <dd className="mt-0.5 text-[17px] font-semibold tabular-nums">{String(upcoming).padStart(2, "0")}</dd>
+                    <dd className="mt-0.5 text-[17px] font-semibold tabular-nums">{String(bookingCount).padStart(2, "0")}</dd>
                   </div>
                   <div>
                     <dt className="text-sm text-ink-soft">{t("За час")}</dt>
@@ -604,7 +622,7 @@ function BookingsTab({
           })}
         </div>
         <p className="font-mono text-[13px] tracking-[0.06em] uppercase text-ink-mute">
-          {allCount} {t("броней")} · 7 {t("дней")}
+          {allCount} {t("броней")}
         </p>
       </div>
 
@@ -709,6 +727,7 @@ function BookingsTab({
           ))}
         </div>
       )}
+      <BookingHistoryMore />
     </div>
   );
 }

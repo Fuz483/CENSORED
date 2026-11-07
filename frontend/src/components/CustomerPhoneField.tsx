@@ -39,6 +39,9 @@ export function CustomerPhoneField({ value, onChange, required = false }: {
         value={value} onChange={(event) => { setPicked(undefined); onChange(event.target.value); }} required={required}
         placeholder="+375291234567" />
       {picked && picked.phone === value && <p className="mt-1 text-[14px] text-ink-soft">{picked.name}</p>}
+      {focused && matches?.query === value && matches.items.length === 0 && (
+        <p className="mt-1 text-[14px] text-ink-soft">{t("Для нового клиента введите полный номер. Подсказки доступны для клиентов вашего учреждения.")}</p>
+      )}
       {items.length > 0 && (
         <ul aria-label={t("Найденные арендаторы")} className="mt-1 divide-y divide-line rounded-lg border border-line bg-paper">
           {items.map((item) => (

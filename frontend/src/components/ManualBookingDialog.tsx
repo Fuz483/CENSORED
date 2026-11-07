@@ -2,14 +2,14 @@ import { useMemo, useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 
 import { useDialog } from "../hooks/useDialog";
-import { ROOM_TYPES, nextDays, toISODate } from "../lib/data";
+import { ROOM_TYPES, nextDays } from "../lib/data";
 import { dayNumber, durationLabel, intervalHours, intervalLabel, intervalPrice, money, monthShort, weekdayShort } from "../lib/format";
 import type { Booking } from "../lib/types";
 import { errorMessage } from "../lib/repository";
-import { freeSlotHours, freeSlots, useApp } from "../state/AppState";
+import { freeSlotHours, freeSlotsForDay, useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
 import { IntervalPicker } from "./IntervalPicker";
-import { isRangeAvailable } from "../lib/intervals";
+import { isDayRangeAvailable } from "../lib/intervals";
 
 interface ManualBookingDialogProps {
   open: boolean;
@@ -22,24 +22,20 @@ export function ManualBookingDialog({
   onClose,
   onSaved,
 }: ManualBookingDialogProps) {
-  const { user, listings, slots, createManualBooking } = useApp();
+  const { user, listings, slotsByDate, createManualBooking } = useApp();
   const { t, language } = useLanguage();
   const ownListings = useMemo(
     () => listings.filter((listing) => listing.ownerId === user?.user_id),
     [listings, user?.user_id],
   );
-  const dates = useMemo(() => nextDays(7).map(toISODate), []);
+  const dates = useMemo(() => nextDays(7), []);
 
   const [listingId, setListingId] = useState<number>(() => ownListings[0]?.id ?? 0);
   const [date, setDate] = useState(dates[0]);
-  const [startTime, setStartTime] = useState(() => {
-    const firstFree = freeSlots(slots, ownListings[0]?.id ?? 0, dates[0])[0]?.startTime;
-    return firstFree ?? "14:00";
-  });
-  const [endTime, setEndTime] = useState(() => {
-    const firstFree = freeSlots(slots, ownListings[0]?.id ?? 0, dates[0])[0]?.startTime ?? "14:00";
-    return nextHour(firstFree);
-  });
+  const firstFreeStart = (id: number, day: string) =>
+    freeSlotsForDay(slotsByDate.get(day)?.get(id) ?? [])[0]?.startTime ?? "14:00";
+  const [startTime, setStartTime] = useState(() => firstFreeStart(listingId, date));
+  const [endTime, setEndTime] = useState(() => nextHour(startTime));
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
@@ -47,9 +43,10 @@ export function ManualBookingDialog({
   const dialogRef = useDialog<HTMLDivElement>(onClose, { open: open && Boolean(user) });
 
   const listing = ownListings.find((item) => item.id === listingId);
-  const free = listing ? freeSlots(slots, listing.id, date) : [];
+  const daySlots = slotsByDate.get(date)?.get(listingId) ?? [];
+  const free = freeSlotsForDay(daySlots);
   const selectedRequest = listing ? { listingId: listing.id, date, startTime, endTime } : undefined;
-  const validRange = Boolean(listing && isRangeAvailable(slots, listing.id, date, startTime, endTime));
+  const validRange = Boolean(listing && isDayRangeAvailable(daySlots, startTime, endTime));
   const selectedHours = intervalHours(startTime, endTime);
   const total = listing ? intervalPrice(listing.price, startTime, endTime) : 0;
 
@@ -57,7 +54,7 @@ export function ManualBookingDialog({
 
   const changeListing = (id: number) => {
     setListingId(id);
-    const firstFree = freeSlots(slots, id, date)[0]?.startTime ?? "14:00";
+    const firstFree = firstFreeStart(id, date);
     setStartTime(firstFree);
     setEndTime(nextHour(firstFree));
     setError(null);
@@ -65,7 +62,7 @@ export function ManualBookingDialog({
 
   const changeDate = (next: string) => {
     setDate(next);
-    const firstFree = freeSlots(slots, listingId, next)[0]?.startTime ?? "14:00";
+    const firstFree = firstFreeStart(listingId, next);
     setStartTime(firstFree);
     setEndTime(nextHour(firstFree));
     setError(null);
@@ -227,7 +224,7 @@ export function ManualBookingDialog({
                 <IntervalPicker
                   listing={listing!}
                   date={date}
-                  slots={slots}
+                  slots={daySlots}
                   selected={selectedRequest}
                   onChange={(start, end) => { setStartTime(start); setEndTime(end); setError(null); }}
                 />

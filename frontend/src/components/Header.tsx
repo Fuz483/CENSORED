@@ -16,7 +16,7 @@ interface HeaderProps {
 }
 
 export function Header({ view, onNavigate, bookingCount }: HeaderProps) {
-  const { user, logout } = useApp();
+  const { user, logout, hasMoreBookings } = useApp();
   const { t } = useLanguage();
   if (!user) return null;
 
@@ -46,7 +46,7 @@ export function Header({ view, onNavigate, bookingCount }: HeaderProps) {
               {t("Мои брони")}
               {bookingCount > 0 && (
                 <span className="ml-1.5 rounded-md bg-orange-soft px-1.5 font-mono text-[13px] tabular-nums text-ink">
-                  {String(bookingCount).padStart(2, "0")}
+                  {String(bookingCount).padStart(2, "0")}{hasMoreBookings ? "+" : ""}
                 </span>
               )}
             </NavLink>

@@ -1,7 +1,8 @@
-import { PEXELS_ROOM_IMAGES, toISODate } from "./data";
+import { PEXELS_ROOM_IMAGES } from "./data";
 import { canonicalCity, canonicalDistrict, cityFromAddress } from "./belarus";
-import { intervalHours } from "./format";
-import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type CaptchaChallenge, type LoginInput, type NewListingInput, type RegisterInput, type UpdateListingInput, type UoInstitution } from "./repository";
+import { intervalHours, minskClock, minskDate } from "./format";
+import { BOOKING_STEP_MINUTES, minutesToTime, timeToMinutes } from "./intervals";
+import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type BookingHistoryPage, type CaptchaChallenge, type LoginInput, type NewListingInput, type RegisterInput, type UoBookingSummary, type UpdateListingInput, type UoInstitution } from "./repository";
 import type { Booking, BookingRequest, BookingState, CustomerSuggestion, GuardScanResult, Listing, RentalAgreement, RoomType, Slot, User, WeeklyReservationInput } from "./types";
 
 type ApiRoomType = "sport_hall" | "assembly_hall" | "it_lab" | "workshop" | "pool";
@@ -11,23 +12,15 @@ const roomTypes: Record<RoomType, ApiRoomType> = {
 const uiTypes: Record<ApiRoomType, RoomType> = {
   sport_hall: "gym", assembly_hall: "hall", it_lab: "it", workshop: "classroom", pool: "pool",
 };
-interface ApiRoom {
-  id: number;
-  school: string;
-  type_room: ApiRoomType;
-  room: string;
+interface ApiRoom extends ApiRoomListing {
   date: string;
-  price: string | number;
-  capacity: number | null;
-  address: string | null;
-  city?: string | null;
-  city_district?: string | null;
-  uo?: string | null;
-  owner_id?: string | null;
-  available_from?: string;
-  available_to?: string;
-  image_url?: string | null;
   available_slots: { start_time: string; end_time: string; price: string | number }[];
+}
+interface ApiCompactRoom extends ApiRoomListing {
+  availability: { date: string; ranges: { start_time: string; end_time: string }[] }[];
+}
+interface ApiCompactCatalog {
+  listings: ApiCompactRoom[];
 }
 interface ApiRoomListing {
   id: number;
@@ -63,6 +56,12 @@ interface ApiBooking {
   customer_id?: number;
   agreement_text?: string | null;
   agreement_accepted_at?: string | null;
+}
+interface ApiUoBookingSummary {
+  total: number;
+  total_hours: number;
+  total_revenue: string | number;
+  listings: { listing_id: number; count: number; has_active_bookings: boolean }[];
 }
 interface ApiWeeklyReservation extends ApiBooking {
   series_label: string;
@@ -109,6 +108,7 @@ function mapApiUser(user: ApiUser): User {
   };
 }
 const TOKEN_KEY = "plyacouka-api-token-v1";
+const BOOKING_HISTORY_PAGE_SIZE = 50;
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const retryableProxyStatuses = new Set([502, 503, 504]);
 
@@ -141,7 +141,16 @@ export class RestRepository implements AppRepository {
     try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; }
   }
 
+  hasSession(): boolean {
+    return Boolean(this.token);
+  }
+
   logout(): void {
+    if (this.token) void this.request("/auth/logout", "POST", undefined, true).catch(() => {});
+    this.clearSession();
+  }
+
+  private clearSession(): void {
     this.sessionRevision++;
     this.token = null;
     try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* Keep in-memory logout working. */ }
@@ -151,7 +160,10 @@ export class RestRepository implements AppRepository {
     const token = this.token;
     if (authenticated && (!token || session !== this.sessionRevision)) throw new RepositoryError("Войдите в аккаунт.", "401");
     const multipart = body instanceof FormData;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), multipart ? 30000 : 20000);
     let response: Response;
+    let data: unknown;
     try {
       response = await fetchWithTransientProxyRetry(`${baseUrl}/api/v1${path}`, {
         method,
@@ -161,16 +173,22 @@ export class RestRepository implements AppRepository {
           ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: multipart ? body : JSON.stringify(body),
-        signal: AbortSignal.timeout(multipart ? 30000 : 20000),
+        signal: controller.signal,
+        keepalive: path === "/auth/logout",
+      });
+      if (response.status === 204) return undefined as T;
+      data = await response.json().catch((error: unknown) => {
+        if (controller.signal.aborted) throw error;
+        return null;
       });
     } catch {
       throw new RepositoryError("Сервер недоступен. Проверьте подключение и повторите попытку.", "NETWORK");
+    } finally {
+      window.clearTimeout(timeout);
     }
-    if (response.status === 204) return undefined as T;
-    const data = await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401 && authenticated && session === this.sessionRevision) this.logout();
-      const detail = data?.detail;
+      if (response.status === 401 && authenticated && session === this.sessionRevision) this.clearSession();
+      const detail = (data as { detail?: unknown } | null)?.detail;
       const message = typeof detail === "string" ? detail : Array.isArray(detail)
         ? detail.map((item: { msg?: string }) => item.msg ?? "Проверьте данные.").join(" ")
         : `Ошибка сервера (${response.status}).`;
@@ -222,6 +240,14 @@ export class RestRepository implements AppRepository {
     return this.request("/auth/uo/institutions");
   }
 
+  exportPersonalData(): Promise<Record<string, unknown>> {
+    return this.request("/privacy/export", "GET", undefined, true);
+  }
+
+  requestErasure(): Promise<{ requested_at: string }> {
+    return this.request("/privacy/erasure-request", "POST", undefined, true);
+  }
+
   async register(input: RegisterInput): Promise<User> {
     return this.authenticate("/auth/register", {
       name: [input.firstName, input.patronymic, input.surname].map((part) => part.trim()).filter(Boolean).join(" ") || "Пользователь",
@@ -270,32 +296,98 @@ export class RestRepository implements AppRepository {
     };
   }
 
+  private bookingsPath(user: User): string {
+    return user.role === "master" ? "/uo/bookings" : `/bookings/user/${encodeURIComponent(user.user_id)}`;
+  }
+
+  private requestBookingHistory(user: User, offset: number): Promise<ApiBooking[]> {
+    return this.request(
+      `${this.bookingsPath(user)}?upcoming=false&offset=${offset}&limit=${BOOKING_HISTORY_PAGE_SIZE + 1}`,
+      "GET", undefined, true,
+    );
+  }
+
+  async loadBookingHistory(user: User, offset: number): Promise<BookingHistoryPage> {
+    const rows = await this.requestBookingHistory(user, offset);
+    return {
+      bookings: rows.slice(0, BOOKING_HISTORY_PAGE_SIZE).map((row) => this.booking(row, user)),
+      nextOffset: rows.length > BOOKING_HISTORY_PAGE_SIZE ? offset + BOOKING_HISTORY_PAGE_SIZE : null,
+    };
+  }
+
+  private async requestUoBookingSummary(): Promise<UoBookingSummary | null> {
+    try {
+      const summary = await this.request<ApiUoBookingSummary>("/uo/bookings/summary", "GET", undefined, true);
+      if (typeof summary.total !== "number" || !Array.isArray(summary.listings)) return null;
+      return {
+        total: summary.total, totalHours: summary.total_hours, totalRevenue: Number(summary.total_revenue),
+        listings: summary.listings.map(({ listing_id, count, has_active_bookings }) => ({
+          listingId: listing_id, count, hasActiveBookings: has_active_bookings,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof RepositoryError && error.code === "404") return null;
+      throw error;
+    }
+  }
+
   async load(user?: User): Promise<AppSnapshot> {
     const session = this.sessionRevision;
-    const [rooms, history, weekly, visits] = await Promise.all([
-      this.request<ApiRoom[]>(`/rooms/catalog?start=${toISODate(new Date())}`),
-      user ? this.request<ApiBooking[]>(user.role === "master" ? "/uo/bookings" : `/bookings/user/${encodeURIComponent(user.user_id)}`, "GET", undefined, true) : [],
-      user?.role === "master" ? this.request<ApiWeeklyReservation[]>("/uo/weekly-reservations", "GET", undefined, true) : [],
+    const startDate = minskDate();
+    const isUo = user?.role === "master";
+    const [rooms, upcoming, history, summary, weekly, visits] = await Promise.all([
+      this.request<ApiCompactCatalog | ApiRoom[]>(`/rooms/catalog?start=${startDate}&days=7&compact=true`),
+      user ? this.request<ApiBooking[]>(`${this.bookingsPath(user)}?upcoming=true`, "GET", undefined, true) : [],
+      user ? this.requestBookingHistory(user, 0) : [],
+      isUo ? this.requestUoBookingSummary() : null,
+      isUo ? this.request<ApiWeeklyReservation[]>("/uo/weekly-reservations", "GET", undefined, true) : [],
       user?.role === "tenant" ? this.request<ApiReservedVisit[]>("/bookings/reserved-visits", "GET", undefined, true) : [],
     ]);
     const slots: Slot[] = [];
     const currentListings = new Map<number, Listing>();
-    for (const room of rooms) {
-      const listing = currentListings.get(room.id) ?? this.listing(room);
-      currentListings.set(listing.id, listing);
-      for (const slot of room.available_slots) {
-        if (new Date(`${room.date}T${slot.start_time}`).getTime() <= Date.now()) continue;
-        slots.push({
-        id: slots.length + 1, listingId: listing.id, date: room.date,
-        startTime: slot.start_time.slice(0, 5), endTime: slot.end_time.slice(0, 5),
-        price: Number(slot.price), state: 0, userId: null,
-        });
+    const now = minskClock();
+    const addSlot = (listingId: number, date: string, startTime: string, endTime: string, price: number) => {
+      if (date < now.date || (date === now.date && startTime <= now.time)) return;
+      slots.push({ id: slots.length + 1, listingId, date, startTime, endTime, price, state: 0, userId: null });
+    };
+    if (Array.isArray(rooms)) {
+      // Servers deployed before the compact catalog ignore the new query flag.
+      for (const room of rooms) {
+        if (!currentListings.has(room.id)) currentListings.set(room.id, this.listing(room));
+        for (const slot of room.available_slots) {
+          addSlot(room.id, room.date, slot.start_time.slice(0, 5), slot.end_time.slice(0, 5), Number(slot.price));
+        }
+      }
+    } else {
+      for (const room of rooms.listings) {
+        const listing = this.listing(room);
+        currentListings.set(listing.id, listing);
+        for (const day of room.availability) {
+          for (const range of day.ranges) {
+            const start = timeToMinutes(range.start_time.slice(0, 5));
+            const end = timeToMinutes(range.end_time.slice(0, 5));
+            if (start === null || end === null) continue;
+            for (let minute = start; minute + BOOKING_STEP_MINUTES <= end; minute += BOOKING_STEP_MINUTES) {
+              addSlot(listing.id, day.date, minutesToTime(minute), minutesToTime(minute + BOOKING_STEP_MINUTES), listing.price / 4);
+            }
+          }
+        }
       }
     }
     if (session === this.sessionRevision) this.listings = currentListings;
+    const upcomingIds = new Set(upcoming.map(({ id }) => id));
+    // Older servers can ignore the upcoming filter and return the entire history.
+    const paginated = (!isUo || summary !== null) && history.length <= BOOKING_HISTORY_PAGE_SIZE + 1 &&
+      history.some(({ id }) => !upcomingIds.has(id));
+    const bookingRows = isUo && summary === null
+      ? await this.request<ApiBooking[]>("/uo/bookings", "GET", undefined, true, session)
+      : [...upcoming, ...(paginated ? history.slice(0, BOOKING_HISTORY_PAGE_SIZE) : history)];
+    const bookings = new Map(bookingRows.map((booking) => [booking.id, booking]));
     return {
       listings: [...currentListings.values()], slots,
-      bookings: user ? history.map((item) => this.booking(item, user, currentListings)) : [],
+      bookings: user ? [...bookings.values()].map((item) => this.booking(item, user, currentListings)) : [],
+      nextBookingHistoryOffset: paginated && history.length > BOOKING_HISTORY_PAGE_SIZE ? BOOKING_HISTORY_PAGE_SIZE : null,
+      uoBookingSummary: summary,
       weeklyReservations: weekly.map((item) => ({
         id: item.id, listingId: item.listing_id, label: item.series_label, date: item.date,
         startTime: item.start_time.slice(0, 5), endTime: item.end_time.slice(0, 5),

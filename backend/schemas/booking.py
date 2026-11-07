@@ -124,6 +124,19 @@ class TenantBookingResponse(BookingResponse):
     agreement_accepted_at: datetime.datetime | None = None
 
 
+class BookingListingSummary(BaseModel):
+    listing_id: int
+    count: int
+    has_active_bookings: bool
+
+
+class UoBookingSummary(BaseModel):
+    total: int
+    total_hours: float
+    total_revenue: Decimal
+    listings: list[BookingListingSummary]
+
+
 class WeeklyReservationResponse(BookingResponse):
     series_label: str
     weekdays: list[int]
@@ -148,14 +161,11 @@ class AvailableSlotInfo(BaseModel):
     price: Decimal = Field(..., description="Стоимость 15-минутного интервала в BYN")
 
 
-class AvailableRoomItem(BaseModel):
-    """Схема информации о доступном помещении со списком слотов и расценками."""
-
+class CatalogRoom(BaseModel):
     id: int
     school: str
     type_room: RoomType
     room: str
-    date: datetime.date
     price: Decimal = Field(..., description="Базовая стоимость 1 часа аренды помещения в BYN")
     capacity: Optional[int] = None
     address: Optional[str] = None
@@ -166,4 +176,29 @@ class AvailableRoomItem(BaseModel):
     available_from: datetime.time = datetime.time(14, 0)
     available_to: datetime.time = datetime.time(21, 0)
     image_url: str = "/room-placeholder.svg"
+
+
+class AvailableRoomItem(CatalogRoom):
+    """Схема информации о доступном помещении со списком слотов и расценками."""
+
+    date: datetime.date
     available_slots: List[AvailableSlotInfo]
+
+
+class AvailableRange(BaseModel):
+    start_time: datetime.time
+    end_time: datetime.time
+
+
+class CatalogDay(BaseModel):
+    date: datetime.date
+    ranges: list[AvailableRange]
+
+
+class CompactCatalogRoom(CatalogRoom):
+    availability: list[CatalogDay]
+
+
+class CompactCatalog(BaseModel):
+    listings: list[CompactCatalogRoom]
+    total: int

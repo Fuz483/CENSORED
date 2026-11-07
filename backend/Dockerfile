@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN mkdir -p /app/uploads/room-photos && chown -R 10001:10001 /app/uploads
 
 EXPOSE 8000
 

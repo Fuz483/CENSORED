@@ -17,6 +17,15 @@ function Test-Endpoint([string]$Url) {
     }
 }
 
+function Test-ApiHealth([string]$Url) {
+    try {
+        $response = Invoke-RestMethod -Uri $Url -TimeoutSec 2
+        return $response.status -eq "ok" -and $response.service -eq "SmartSpace Backend v2.0"
+    } catch {
+        return $false
+    }
+}
+
 if (-not (Test-Path $pgCtl)) { throw "PostgreSQL 18 was not found at $pgCtl." }
 if (-not (Test-Path $postgresData)) { throw "Local PostgreSQL data directory was not found at $postgresData." }
 if (-not (Test-Path $python)) { throw "Backend virtual environment is missing. Create backend\.venv and install backend requirements first." }
@@ -37,7 +46,8 @@ try {
 }
 
 $backendHealthUrl = "http://127.0.0.1:8000/health"
-if (-not (Test-Endpoint $backendHealthUrl)) {
+$backendReadyUrl = "http://127.0.0.1:8000/ready"
+if (-not (Test-ApiHealth $backendHealthUrl)) {
     $backendListener = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
     if ($backendListener) {
         $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($backendListener[0].OwningProcess)" -ErrorAction SilentlyContinue
@@ -65,25 +75,19 @@ if (-not $supervisor) {
         -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
 }
 
-if (-not (Test-Endpoint $backendHealthUrl)) {
-    $backendReady = $false
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        if (Test-Endpoint $backendHealthUrl) { $backendReady = $true; break }
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not $backendReady) {
-        $stderr = Get-ChildItem (Join-Path $PSScriptRoot ".local\backend-*.err.log") -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($stderr) { Get-Content $stderr.FullName -Tail 30 | Write-Host }
-        throw "SmartSpace API did not become healthy within 30 seconds. Check .local\backend-supervisor.log and the latest .local\backend-*.err.log."
-    }
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+$backendReady = Test-Endpoint $backendReadyUrl
+while (-not $backendReady -and [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+    $backendReady = Test-Endpoint $backendReadyUrl
 }
-
-if (Test-Endpoint $backendHealthUrl) {
-    Write-Host "SmartSpace API is healthy at http://127.0.0.1:8000 (automatic restart enabled)."
-} else {
-    throw "SmartSpace API stopped before the frontend could start."
+if (-not $backendReady) {
+    $stderr = Get-ChildItem (Join-Path $PSScriptRoot ".local\backend-*.err.log") -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($stderr) { Get-Content $stderr.FullName -Tail 30 | Write-Host }
+    throw "SmartSpace API and database did not become ready. Check the database settings, .local\backend-supervisor.log and the latest .local\backend-*.err.log."
 }
+Write-Host "SmartSpace API and database are ready at http://127.0.0.1:8000 (automatic restart enabled)."
 
 $frontendUrl = "http://127.0.0.1:5173"
 if (Test-Endpoint "$frontendUrl/@vite/client") {

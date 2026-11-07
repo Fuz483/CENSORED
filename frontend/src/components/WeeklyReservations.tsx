@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from "react";
 
-import { toISODate } from "../lib/data";
-import { intervalLabel, longDate, weekdayShort } from "../lib/format";
+import { intervalLabel, longDate, minskDate, weekdayIndex, weekdayShort } from "../lib/format";
 import { timeToMinutes } from "../lib/intervals";
 import { useLanguage } from "../lib/i18n";
 import { errorMessage } from "../lib/repository";
@@ -20,7 +19,7 @@ export function WeeklyReservations({ listings }: { listings: Listing[] }) {
   const { t, language } = useLanguage();
   const [listingId, setListingId] = useState<number>();
   const [label, setLabel] = useState("");
-  const [date, setDate] = useState(() => toISODate(new Date()));
+  const [date, setDate] = useState(() => minskDate());
   const [endsOn, setEndsOn] = useState("");
   const [days, setDays] = useState<number[] | null>(null);
   const [phone, setPhone] = useState("");
@@ -35,7 +34,7 @@ export function WeeklyReservations({ listings }: { listings: Listing[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listing = listings.find((item) => item.id === listingId) ?? listings[0];
-  const selectedDays = days ?? [date ? (new Date(`${date}T12:00:00`).getDay() + 6) % 7 : 0];
+  const selectedDays = days ?? [date ? (weekdayIndex(date) + 6) % 7 : 0];
   const allowed = listing ? CLOCK.filter((time) => time >= listing.availableFrom && time <= listing.availableTo) : [];
   const starts = allowed.slice(0, -4);
   const start = starts.includes(startTime) ? startTime : starts[0] ?? "";
@@ -84,7 +83,7 @@ export function WeeklyReservations({ listings }: { listings: Listing[] }) {
             </label>
             <label className="label">
               {t("Дата начала серии")}
-              <input className="field-box mt-1" type="date" required min={toISODate(new Date())}
+              <input className="field-box mt-1" type="date" required min={minskDate()}
                 value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
             <label className="label">
@@ -160,7 +159,7 @@ export function WeeklyReservations({ listings }: { listings: Listing[] }) {
                   void run(async () => { await setWeeklyEndDate(item.id, editedEnd); setEndId(null); });
                 }}>
                   <label className="label min-w-[180px] flex-1">{t("Дата окончания серии")}
-                    <input className="field-box mt-1" type="date" required min={toISODate(new Date())}
+                    <input className="field-box mt-1" type="date" required min={minskDate()}
                       value={editedEnd} onChange={(event) => setEditedEnd(event.target.value)} />
                   </label>
                   <button type="submit" disabled={busy} className="btn btn-primary">{t("Сохранить")}</button>

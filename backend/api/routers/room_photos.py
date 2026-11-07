@@ -1,15 +1,17 @@
 import datetime
+import struct
 import uuid
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 from typing import Annotated
 
+from anyio import CapacityLimiter, to_thread
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from api.dependencies import get_current_school
 from api.routers.bookings import minsk_now, owned_listing, visible_listings
@@ -19,47 +21,59 @@ from schemas.booking import BookingState, RoomType
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["Фотографии помещений"])
 media_router = APIRouter(prefix="/media/catalog", tags=["Фотографии помещений"])
+legacy_media_router = APIRouter(prefix="/media/rooms", tags=["Фотографии помещений"])
+ROOM_PHOTO_DIR = Path(__file__).resolve().parents[2] / "uploads" / "room-photos"
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 MAX_PHOTO_PIXELS = 32_000_000
-IMAGE_TYPES = {
-    "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
-    "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
-    "image/webp": lambda data: data.startswith(b"RIFF") and data[8:12] == b"WEBP",
-}
+IMAGE_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}
+IMAGE_EXTENSIONS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+PHOTO_WORKERS = CapacityLimiter(2)
+PHOTO_SIZE_ERROR = "Размер фотографии не должен превышать 8 МБ."
 
 
-def validate_photo_contents(contents: bytes, content_type: str) -> None:
+def sanitize_photo(contents: bytes, content_type: str) -> bytes:
+    if len(contents) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail=PHOTO_SIZE_ERROR)
     too_large = "Разрешение фотографии не должно превышать 32 мегапикселя."
+    image_format = IMAGE_TYPES.get(content_type)
+    if image_format is None:
+        raise HTTPException(status_code=415, detail="Поддерживаются фотографии JPG, PNG и WebP.")
     try:
-        with Image.open(BytesIO(contents), formats=("JPEG", "PNG", "WEBP")) as photo:
-            if Image.MIME.get(photo.format) != content_type:
-                raise ValueError("Image format does not match its media type.")
+        with Image.open(BytesIO(contents), formats=(image_format,)) as photo:
             if photo.width * photo.height > MAX_PHOTO_PIXELS:
                 raise HTTPException(status_code=413, detail=too_large)
-            photo.load()
+            photo.thumbnail((2400, 2400))
+            with ImageOps.exif_transpose(photo) as oriented:
+                mode = "RGBA" if image_format != "JPEG" and oriented.has_transparency_data else "RGB"
+                # Rebuild from pixels so neither EXIF nor format-specific metadata is copied.
+                with Image.new(mode, oriented.size) as clean, oriented.convert(mode) as pixels:
+                    clean.paste(pixels)
+                    output = BytesIO()
+                    clean.save(output, format=image_format)
+                    contents = output.getvalue()
     except Image.DecompressionBombError as error:
         raise HTTPException(status_code=413, detail=too_large) from error
-    except (OSError, SyntaxError, ValueError) as error:
+    except (OSError, SyntaxError, TypeError, ValueError, struct.error) as error:
         raise HTTPException(status_code=415, detail="Формат файла не соответствует изображению.") from error
+    if len(contents) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail=PHOTO_SIZE_ERROR)
+    return contents
 
 
 async def read_photo(file: UploadFile) -> tuple[bytes, str]:
     content_type = file.content_type or ""
-    validate = IMAGE_TYPES.get(content_type)
-    if validate is None:
+    if content_type not in IMAGE_TYPES:
         raise HTTPException(status_code=415, detail="Поддерживаются фотографии JPG, PNG и WebP.")
     contents = await file.read(MAX_PHOTO_BYTES + 1)
     if len(contents) > MAX_PHOTO_BYTES:
-        raise HTTPException(status_code=413, detail="Размер фотографии не должен превышать 8 МБ.")
-    if not validate(contents):
-        raise HTTPException(status_code=415, detail="Формат файла не соответствует изображению.")
-    await run_in_threadpool(validate_photo_contents, contents, content_type)
-    return contents, content_type
+        raise HTTPException(status_code=413, detail=PHOTO_SIZE_ERROR)
+    return await to_thread.run_sync(sanitize_photo, contents, content_type, limiter=PHOTO_WORKERS), content_type
 
 
 def assign_photo(listing: RoomListing, contents: bytes, content_type: str) -> None:
     listing.photo_data = contents
     listing.photo_type = content_type
+    listing.photo_sanitized = True
     listing.image_url = f"/media/catalog/{listing.id}?v={uuid.uuid4().hex}"
     listing.image_updated_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
@@ -147,11 +161,41 @@ async def has_active_or_future_bookings(listing_id: int, db: AsyncSession) -> bo
 @media_router.get("/{listing_id}")
 async def catalog_photo(listing_id: int, db: AsyncSession = Depends(get_db)) -> Response:
     photo = (await db.execute(visible_listings().with_only_columns(
-        RoomListing.photo_data, RoomListing.photo_type,
+        RoomListing.photo_data, RoomListing.photo_type, RoomListing.photo_sanitized,
     ).where(RoomListing.id == listing_id))).one_or_none()
-    if photo is None or photo.photo_data is None:
+    if photo is None or photo.photo_data is None or photo.photo_type not in IMAGE_TYPES:
         raise HTTPException(status_code=404, detail="Фото не найдено.")
-    return Response(photo.photo_data, media_type=photo.photo_type, headers={"Cache-Control": "public, max-age=300"})
+    contents = photo.photo_data if photo.photo_sanitized else await to_thread.run_sync(
+        sanitize_photo, photo.photo_data, photo.photo_type, limiter=PHOTO_WORKERS,
+    )
+    return image_response(contents, photo.photo_type)
+
+
+def image_response(contents: bytes, content_type: str) -> Response:
+    return Response(contents, media_type=content_type, headers={
+        "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff",
+    })
+
+
+def read_legacy_photo(filename: str, content_type: str) -> bytes:
+    path = ROOM_PHOTO_DIR / filename
+    try:
+        if path.is_symlink() or path.resolve().parent != ROOM_PHOTO_DIR.resolve() or not path.is_file():
+            raise FileNotFoundError
+        with path.open("rb") as file:
+            contents = file.read(MAX_PHOTO_BYTES + 1)
+    except OSError as error:
+        raise HTTPException(status_code=404, detail="Фото не найдено.") from error
+    return sanitize_photo(contents, content_type)
+
+
+@legacy_media_router.get("/{filename}", include_in_schema=False)
+async def legacy_room_photo(filename: str) -> Response:
+    content_type = IMAGE_EXTENSIONS.get(Path(filename).suffix.lower())
+    if content_type is None:
+        raise HTTPException(status_code=404, detail="Фото не найдено.")
+    contents = await to_thread.run_sync(read_legacy_photo, filename, content_type, limiter=PHOTO_WORKERS)
+    return image_response(contents, content_type)
 
 
 @router.post("/photo", status_code=status.HTTP_200_OK)

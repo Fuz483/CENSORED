@@ -11,18 +11,23 @@ import {
 } from "react";
 
 import { RestRepository } from "../lib/restRepository";
-import { PartialBookingError, RepositoryError, errorMessage, type AppRepository, type CaptchaChallenge, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput, type UpdateListingInput, type UoInstitution } from "../lib/repository";
+import { PartialBookingError, RepositoryError, errorMessage, type AppRepository, type CaptchaChallenge, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput, type UpdateListingInput, type UoBookingSummary, type UoInstitution } from "../lib/repository";
 import type { Booking, BookingRequest, CustomerSuggestion, GuardScanResult, Listing, RentalAgreement, ReservedVisit, Slot, User, WeeklyReservation, WeeklyReservationInput } from "../lib/types";
 import { timeToMinutes } from "../lib/intervals";
 
 interface AppContextValue {
   user: User | null;
   listings: Listing[];
-  slots: Slot[];
+  slotsByDate: Map<string, Map<number, Slot[]>>;
   bookings: Booking[];
+  hasMoreBookings: boolean;
+  loadingMoreBookings: boolean;
+  loadMoreBookings: () => Promise<void>;
+  uoBookingSummary: UoBookingSummary | null;
   weeklyReservations: WeeklyReservation[];
   reservedVisits: ReservedVisit[];
   ready: boolean;
+  sessionReady: boolean;
   loadError: string | null;
   reload: () => Promise<void>;
   login: (input: LoginInput) => Promise<string | null>;
@@ -30,6 +35,8 @@ interface AppContextValue {
   register: (input: RegisterInput) => Promise<string | null>;
   getCaptcha: () => Promise<CaptchaChallenge>;
   updateProfile: (input: ProfileInput) => Promise<string | null>;
+  exportPersonalData: () => Promise<Record<string, unknown>>;
+  requestErasure: () => Promise<{ requested_at: string }>;
   logout: () => void;
   previewAgreements: (requests: BookingRequest[]) => Promise<RentalAgreement[]>;
   bookSlots: (requests: BookingRequest[], tokens: string[]) => Promise<Booking[]>;
@@ -48,38 +55,81 @@ interface AppContextValue {
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
+type BookingHistoryCursor = { nextOffset: number | null; loading: boolean };
 
 export function AppProvider({
   children,
   repository,
+  initialize = true,
 }: {
   children: ReactNode;
   repository?: AppRepository;
+  initialize?: boolean;
 }) {
   const [repo] = useState(() => repository ?? new RestRepository());
   const [user, setUser] = useState<User | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [uoBookingSummary, setUoBookingSummary] = useState<UoBookingSummary | null>(null);
+  const [historyCursor, setHistoryCursor] = useState<BookingHistoryCursor>({ nextOffset: null, loading: false });
+  const historyRef = useRef(historyCursor);
   const [weeklyReservations, setWeeklyReservations] = useState<WeeklyReservation[]>([]);
   const [reservedVisits, setReservedVisits] = useState<ReservedVisit[]>([]);
   const [ready, setReady] = useState(false);
+  const [sessionReady, setSessionReady] = useState(() => !repo.hasSession?.());
   const [loadError, setLoadError] = useState<string | null>(null);
   const sessionRevision = useRef(0);
+
+  const setHistory = useCallback((nextOffset: number | null, loading = false) => {
+    const cursor = { nextOffset, loading };
+    historyRef.current = cursor;
+    setHistoryCursor(cursor);
+    return cursor;
+  }, []);
 
   const setSessionUser = useCallback((nextUser: User | null) => {
     setUser(nextUser);
     setBookings([]);
+    setUoBookingSummary(null);
+    setHistory(null);
     setWeeklyReservations([]);
     setReservedVisits([]);
-  }, []);
+  }, [setHistory]);
+
+  const applySnapshot = useCallback((snapshot: Awaited<ReturnType<AppRepository["load"]>>) => {
+    setListings(snapshot.listings);
+    setSlots(snapshot.slots);
+    setBookings(snapshot.bookings);
+    setUoBookingSummary(snapshot.uoBookingSummary ?? null);
+    setHistory(snapshot.nextBookingHistoryOffset ?? null);
+    setWeeklyReservations(snapshot.weeklyReservations ?? []);
+    setReservedVisits(snapshot.reservedVisits ?? []);
+    setLoadError(null);
+  }, [setHistory]);
+
+  const refresh = useCallback(async (forUser: User | undefined, session: number) => {
+    if (session !== sessionRevision.current) return;
+    try {
+      const snapshot = await repo.load(forUser);
+      if (session === sessionRevision.current) applySnapshot(snapshot);
+    } finally {
+      if (session === sessionRevision.current) setReady(true);
+    }
+  }, [applySnapshot, repo]);
 
   const logout = useCallback(() => {
-    sessionRevision.current++;
+    const session = ++sessionRevision.current;
     repo.logout?.();
     setSessionUser(null);
+    setSessionReady(true);
     setLoadError(null);
-  }, [repo, setSessionUser]);
+    if (initialize) {
+      void refresh(undefined, session).catch((error) => {
+        if (session === sessionRevision.current) setLoadError(errorMessage(error, "Не удалось загрузить данные."));
+      });
+    }
+  }, [initialize, refresh, repo, setSessionUser]);
 
   const handleLoadError = useCallback((error: unknown, session: number, fallback: string) => {
     if (session !== sessionRevision.current) return;
@@ -90,42 +140,52 @@ export function AppProvider({
     setLoadError(errorMessage(error, fallback));
   }, [logout]);
 
-  const refresh = useCallback(async (forUser: User | undefined, session: number) => {
-    if (session !== sessionRevision.current) return;
-    const snapshot = await repo.load(forUser);
-    if (session !== sessionRevision.current) return;
-    setListings(snapshot.listings);
-    setSlots(snapshot.slots);
-    setBookings(snapshot.bookings);
-    setWeeklyReservations(snapshot.weeklyReservations ?? []);
-    setReservedVisits(snapshot.reservedVisits ?? []);
-    setLoadError(null);
-  }, [repo]);
+  const loadMoreBookings = useCallback(async () => {
+    const { nextOffset, loading } = historyRef.current;
+    if (!user || !repo.loadBookingHistory || nextOffset === null || loading) return;
+    const pending = setHistory(nextOffset, true);
+    try {
+      const page = await repo.loadBookingHistory(user, nextOffset);
+      if (historyRef.current !== pending) return;
+      setBookings((current) => {
+        const byId = new Map(current.map((booking) => [booking.id, booking]));
+        for (const booking of page.bookings) {
+          if (!byId.has(booking.id)) byId.set(booking.id, booking);
+        }
+        return [...byId.values()];
+      });
+      setHistory(page.nextOffset);
+    } catch (error) {
+      if (historyRef.current !== pending) return;
+      setHistory(nextOffset);
+      if (error instanceof RepositoryError && error.code === "401") logout();
+      throw error;
+    }
+  }, [logout, repo, setHistory, user]);
 
   useEffect(() => {
+    if (!initialize) return;
     let active = true;
     const session = sessionRevision.current;
     (async () => {
       const initialUser = await repo.restoreSession?.() ?? null;
       if (!active || session !== sessionRevision.current) return null;
       setUser(initialUser);
+      setSessionReady(true);
       return repo.load(initialUser ?? undefined);
     })().then((snapshot) => {
       if (!active || !snapshot || session !== sessionRevision.current) return;
-      setListings(snapshot.listings);
-      setSlots(snapshot.slots);
-      setBookings(snapshot.bookings);
-      setWeeklyReservations(snapshot.weeklyReservations ?? []);
-      setReservedVisits(snapshot.reservedVisits ?? []);
+      applySnapshot(snapshot);
       setReady(true);
     }).catch((error) => {
-      if (active) {
+      if (active && session === sessionRevision.current) {
+        setSessionReady(true);
         handleLoadError(error, session, "Не удалось загрузить данные.");
         setReady(true);
       }
     });
     return () => { active = false; };
-  }, [handleLoadError, repo]);
+  }, [applySnapshot, handleLoadError, initialize, repo]);
 
   const reload = useCallback(async () => {
     const session = sessionRevision.current;
@@ -138,7 +198,7 @@ export function AppProvider({
     catch (error) { handleLoadError(error, session, "Не удалось загрузить данные."); }
   }, [handleLoadError, refresh, repo, user]);
 
-  const refreshAfterMutation = useCallback(async (forUser: User, session: number) => {
+  const refreshAfterMutation = useCallback(async (forUser: User | undefined, session: number) => {
     try { await refresh(forUser, session); }
     catch (error) { handleLoadError(error, session, "Не удалось обновить данные."); }
   }, [handleLoadError, refresh]);
@@ -149,12 +209,14 @@ export function AppProvider({
       const nextUser = await repo.login(input);
       if (session !== sessionRevision.current) return null;
       setSessionUser(nextUser);
+      setSessionReady(true);
       await refreshAfterMutation(nextUser, session);
       return null;
     } catch (error) {
+      if (!ready) void refreshAfterMutation(undefined, session);
       return error instanceof RepositoryError ? error.message : "Не удалось войти. Попробуйте ещё раз.";
     }
-  }, [refreshAfterMutation, repo, setSessionUser]);
+  }, [ready, refreshAfterMutation, repo, setSessionUser]);
 
   const register = useCallback(async (input: RegisterInput) => {
     const session = ++sessionRevision.current;
@@ -162,12 +224,42 @@ export function AppProvider({
       const nextUser = await repo.register(input);
       if (session !== sessionRevision.current) return null;
       setSessionUser(nextUser);
+      setSessionReady(true);
       await refreshAfterMutation(nextUser, session);
       return null;
     } catch (error) {
+      if (!ready) void refreshAfterMutation(undefined, session);
       return error instanceof RepositoryError ? error.message : "Не удалось создать аккаунт. Проверьте данные и повторите попытку.";
     }
-  }, [refreshAfterMutation, repo, setSessionUser]);
+  }, [ready, refreshAfterMutation, repo, setSessionUser]);
+
+  const exportPersonalData = useCallback(async () => {
+    if (!user) throw new RepositoryError("Войдите в аккаунт.", "401");
+    if (!repo.exportPersonalData) throw new RepositoryError("Выгрузка данных недоступна.");
+    const session = sessionRevision.current;
+    try {
+      const result = await repo.exportPersonalData();
+      if (session !== sessionRevision.current) throw new RepositoryError("Войдите в аккаунт.", "401");
+      return result;
+    } catch (error) {
+      if (error instanceof RepositoryError && error.code === "401" && session === sessionRevision.current) logout();
+      throw error;
+    }
+  }, [logout, repo, user]);
+
+  const requestErasure = useCallback(async () => {
+    if (!user) throw new RepositoryError("Войдите в аккаунт.", "401");
+    if (!repo.requestErasure) throw new RepositoryError("Запрос на удаление данных недоступен.");
+    const session = sessionRevision.current;
+    try {
+      const result = await repo.requestErasure();
+      if (session !== sessionRevision.current) throw new RepositoryError("Войдите в аккаунт.", "401");
+      return result;
+    } catch (error) {
+      if (error instanceof RepositoryError && error.code === "401" && session === sessionRevision.current) logout();
+      throw error;
+    }
+  }, [logout, repo, user]);
 
   const getCaptcha = useCallback(async () => {
     if (!repo.getCaptcha) throw new RepositoryError("Капча недоступна.");
@@ -302,9 +394,30 @@ export function AppProvider({
     return booking;
   }, [refresh, repo, user]);
 
+  const slotsByDate = useMemo(() => {
+    const dates = new Map<string, Map<number, Slot[]>>();
+    for (const slot of slots) {
+      let listings = dates.get(slot.date);
+      if (!listings) dates.set(slot.date, listings = new Map());
+      let daySlots = listings.get(slot.listingId);
+      if (!daySlots) listings.set(slot.listingId, daySlots = []);
+      daySlots.push(slot);
+    }
+    return dates;
+  }, [slots]);
+
   const value = useMemo(() => ({
-    user, listings, slots, bookings, weeklyReservations, reservedVisits, ready, loadError, reload, login, listUoInstitutions, register, getCaptcha, updateProfile, logout, previewAgreements, bookSlots, createWeeklyReservation, linkWeeklyCustomer, searchCustomers, setWeeklyEndDate, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking,
-  }), [user, listings, slots, bookings, weeklyReservations, reservedVisits, ready, loadError, reload, login, listUoInstitutions, register, getCaptcha, updateProfile, logout, previewAgreements, bookSlots, createWeeklyReservation, linkWeeklyCustomer, searchCustomers, setWeeklyEndDate, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking]);
+    user, listings, slotsByDate, bookings, hasMoreBookings: historyCursor.nextOffset !== null,
+    loadingMoreBookings: historyCursor.loading, loadMoreBookings, uoBookingSummary, weeklyReservations, reservedVisits, ready,
+    sessionReady, loadError, reload, login, listUoInstitutions, register, getCaptcha, updateProfile, exportPersonalData,
+    requestErasure, logout, previewAgreements, bookSlots, createWeeklyReservation, linkWeeklyCustomer, searchCustomers,
+    setWeeklyEndDate, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing,
+    uploadRoomPhoto, createManualBooking,
+  }), [user, listings, slotsByDate, bookings, historyCursor, loadMoreBookings, uoBookingSummary, weeklyReservations, reservedVisits, ready,
+    sessionReady, loadError, reload, login, listUoInstitutions, register, getCaptcha, updateProfile, exportPersonalData,
+    requestErasure, logout, previewAgreements, bookSlots, createWeeklyReservation, linkWeeklyCustomer, searchCustomers,
+    setWeeklyEndDate, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing,
+    uploadRoomPhoto, createManualBooking]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
@@ -315,32 +428,22 @@ export function useApp(): AppContextValue {
   return context;
 }
 
-export function freeSlots(
-  slots: Slot[], listingId: number, date: string, from = 14, to = 21,
-): Slot[] {
+export function freeSlotsForDay(slots: Slot[], from = 14, to = 21): Slot[] {
   return slots
-    .filter((slot) => {
-      if (slot.listingId !== listingId || slot.date !== date || slot.state !== 0) return false;
-      const hour = Number(slot.startTime.slice(0, 2));
-      return hour >= from && hour < to;
-    })
+    .filter((slot) => isFreeWithinHours(slot, from, to))
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
-export { isRangeAvailable } from "../lib/intervals";
-
-export function freeHourCount(slots: Slot[], date: string, from = 14, to = 21): number {
-  const minutes = slots.filter((slot) => {
-    if (slot.date !== date || slot.state !== 0) return false;
-    const hour = Number(slot.startTime.slice(0, 2));
-    return hour >= from && hour < to;
-  }).reduce((sum, slot) => sum + slotDuration(slot), 0);
+export function freeSlotHours(slots: Slot[], from = 0, to = 24): number {
+  const minutes = slots.reduce((sum, slot) =>
+    isFreeWithinHours(slot, from, to) ? sum + slotDuration(slot) : sum,
+  0);
   return Math.round((minutes / 60) * 100) / 100;
 }
 
-export function freeSlotHours(slots: Slot[]): number {
-  const minutes = slots.filter((slot) => slot.state === 0).reduce((sum, slot) => sum + slotDuration(slot), 0);
-  return Math.round((minutes / 60) * 100) / 100;
+function isFreeWithinHours(slot: Slot, from: number, to: number): boolean {
+  const hour = Number(slot.startTime.slice(0, 2));
+  return slot.state === 0 && hour >= from && hour < to;
 }
 
 function slotDuration(slot: Slot): number {

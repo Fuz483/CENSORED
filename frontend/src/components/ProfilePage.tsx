@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, Check, UserRound } from "lucide-react";
+import { ArrowLeft, Check, Download, UserRound } from "lucide-react";
+import { errorMessage } from "../lib/repository";
 import { useLanguage } from "../lib/i18n";
 import { useApp } from "../state/AppState";
 
 export function ProfilePage({ onBack }: { onBack: () => void }) {
-  const { user, updateProfile } = useApp();
+  const { user, updateProfile, exportPersonalData, requestErasure } = useApp();
   const { t } = useLanguage();
   const initialName = profileNameParts(user);
   const [surname, setSurname] = useState(initialName.surname);
@@ -15,6 +16,8 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [privacyPending, setPrivacyPending] = useState(false);
+  const [privacyMessage, setPrivacyMessage] = useState<{ text: string; error?: boolean }>();
 
   useEffect(() => {
     if (!user) return;
@@ -38,6 +41,39 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
       else setSaved(true);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const downloadData = async () => {
+    setPrivacyPending(true);
+    setPrivacyMessage(undefined);
+    try {
+      const data = await exportPersonalData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "plyacouka-personal-data.json";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (cause) {
+      setPrivacyMessage({ text: errorMessage(cause, "Не удалось выгрузить данные."), error: true });
+    } finally {
+      setPrivacyPending(false);
+    }
+  };
+
+  const submitErasureRequest = async () => {
+    if (!window.confirm(t("Отправить запрос на удаление своих данных?"))) return;
+    setPrivacyPending(true);
+    setPrivacyMessage(undefined);
+    try {
+      await requestErasure();
+      setPrivacyMessage({ text: "Запрос на удаление данных сохранён." });
+    } catch (cause) {
+      setPrivacyMessage({ text: errorMessage(cause, "Не удалось отправить запрос на удаление."), error: true });
+    } finally {
+      setPrivacyPending(false);
     }
   };
 
@@ -73,6 +109,19 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
           {(error || saved) && <p role={error ? "alert" : "status"} className={`mt-5 text-[15px] ${error ? "text-orange" : "text-blue"}`}>{error ? t(error) : <span className="inline-flex items-center gap-1.5"><Check className="size-4" />{t("Профиль сохранён")}</span>}</p>}
           <button type="submit" disabled={saving} className="btn btn-primary mt-6 h-12 w-full sm:w-auto sm:min-w-[220px]">{saving ? t("Сохраняем…") : t("Сохранить профиль")}</button>
         </form>
+      </section>
+      <section className="mt-8 rounded-xl border border-line bg-surface p-5 sm:p-8">
+        <h2 className="text-xl">{t("Персональные данные")}</h2>
+        <a href="/privacy" className="archive-link mt-2 inline-block text-[15px]">{t("Политика обработки персональных данных")}</a>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" disabled={privacyPending} onClick={downloadData} className="btn btn-quiet">
+            <Download className="size-4" aria-hidden="true" />{t("Скачать мои данные")}
+          </button>
+          <button type="button" disabled={privacyPending} onClick={submitErasureRequest} className="btn btn-quiet">
+            {t("Запросить удаление данных")}
+          </button>
+        </div>
+        {privacyMessage && <p role={privacyMessage.error ? "alert" : "status"} className="mt-3 text-[15px]">{t(privacyMessage.text)}</p>}
       </section>
     </main>
   );

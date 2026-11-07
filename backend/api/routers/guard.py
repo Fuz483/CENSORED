@@ -43,14 +43,16 @@ async def scan_qr_code(
     if not slots:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"QR-пропуск с кодом '{payload.code}' не зарегистрирован в базе данных.",
+            detail="QR-пропуск не найден.",
+            headers={"Cache-Control": "no-store"},
         )
 
     first_slot = slots[0]
     last_slot = slots[-1]
     total_price = sum((slot.price for slot in slots), Decimal("0.00"))
-    today = minsk_now().date()
-    booking_is_for_today = all(slot.date == today for slot in slots)
+    now = minsk_now()
+    booking_is_for_today = all(slot.date == now.date() for slot in slots)
+    in_booking_hours = any(slot.start_time <= now.time() < slot.end_time for slot in slots)
     all_slots_confirmed = all(slot.state in VALID_ACCESS_STATES for slot in slots)
     same_session = all(
         slot.user_id == first_slot.user_id and slot.listing_id == first_slot.listing_id for slot in slots
@@ -59,16 +61,19 @@ async def scan_qr_code(
     if not same_session:
         access_granted = False
         reason = "Допуск запрещен: данные пропуска не совпадают."
-    elif all_slots_confirmed and booking_is_for_today:
-        access_granted = True
-        reason = "Допуск разрешен: бесплатная бронь подтверждена и действует сегодня."
     elif not booking_is_for_today:
         access_granted = False
         reason = f"Допуск запрещен: пропуск действует только в дату бронирования ({first_slot.date})."
-    else:
+    elif not all_slots_confirmed:
         access_granted = False
         invalid_states = sorted({slot.state for slot in slots if slot.state not in VALID_ACCESS_STATES})
         reason = f"Допуск запрещен: бронь не подтверждена бесплатно (статус: {', '.join(invalid_states)})."
+    elif not in_booking_hours:
+        access_granted = False
+        reason = "Допуск запрещен: пропуск действует только во время бронирования."
+    else:
+        access_granted = True
+        reason = "Допуск разрешен: бронь подтверждена и действует сейчас."
 
     response.headers["Cache-Control"] = "no-store"
     return QRScanResponse(
@@ -82,7 +87,10 @@ async def scan_qr_code(
         session_end=last_slot.end_time,
         slots_count=len(slots),
         total_price=total_price,
-        user=QRVisitor(name=first_slot.user.name, phone=first_slot.user.phone) if access_granted else QRVisitor(),
+        user=QRVisitor(
+            name=first_slot.visitor_name if first_slot.visitor_name is not None else first_slot.user.name,
+            phone=first_slot.visitor_phone if first_slot.visitor_phone is not None else first_slot.user.phone,
+        ) if access_granted else QRVisitor(),
         slots=[
             QRScanSlot(date=slot.date, start_time=slot.start_time, end_time=slot.end_time, state=slot.state)
             for slot in slots

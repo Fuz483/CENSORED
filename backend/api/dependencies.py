@@ -2,26 +2,35 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from core.security import decode_access_token
+from core.security import AccessSession, decode_access_token
 from core.uo_demo import is_demo_institution
 from db.database import get_db
-from db.models import User
+from db.models import RevokedSession, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
+async def get_session(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> AccessSession:
+    session = decode_access_token(credentials.credentials) if credentials and len(credentials.credentials) <= 4096 else None
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Войдите в аккаунт.")
+    return session
+
+
+async def get_current_user(
+    session: Annotated[AccessSession, Depends(get_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
-    user_id = decode_access_token(credentials.credentials) if credentials else None
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Войдите в аккаунт.")
-    user = (await db.execute(select(User).where(User.user_id == user_id))).scalar_one_or_none()
+    user = await db.scalar(select(User).where(
+        User.user_id == session.user_id,
+        ~exists().where(RevokedSession.token_id == session.token_id),
+    ))
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна.")
     return user

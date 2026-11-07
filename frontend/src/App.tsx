@@ -1,11 +1,13 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 
 import { BookingsPage } from "./components/BookingsPage";
 import { Header, type View } from "./components/Header";
 import { LoginPage } from "./components/LoginPage";
+import { PrivacyPolicy } from "./components/PrivacyPolicy";
 import { SearchPage } from "./components/SearchPage";
 import { UoDashboard } from "./components/UoDashboard";
 import { ProfilePage } from "./components/ProfilePage";
+import { trackDialogOpeners } from "./hooks/useDialog";
 import { AppProvider, useApp } from "./state/AppState";
 import { LanguageProvider, useLanguage, type Language } from "./lib/i18n";
 
@@ -19,11 +21,10 @@ function viewFromLocation(): View {
   return "search";
 }
 
-function Root() {
-  const { user, bookings, ready, loadError, reload } = useApp();
+function Root({ isGuardRoute }: { isGuardRoute: boolean }) {
+  const { user, bookings, ready, sessionReady, loadError, reload } = useApp();
   const { t } = useLanguage();
   const [view, setView] = useState(viewFromLocation);
-  const isGuardRoute = window.location.pathname.replace(/\/+$/, "") === "/guard";
   const myBookingCount = user
     ? bookings.filter((booking) => booking.customerId === user.id).length
     : 0;
@@ -60,7 +61,8 @@ function Root() {
       </div>
     );
   }
-  if (!ready) return <div className="min-h-dvh bg-paper" aria-label="Загрузка" />;
+  const pending = <p className="page-shell py-8 text-ink-soft" role="status">{t("Подождите…")}</p>;
+  if (!sessionReady) return pending;
   const errorBanner = loadError && <div role="alert" className="border-b border-orange/30 bg-orange-soft px-5 py-3 text-[14px] text-ink">
     {t(loadError)} <button type="button" onClick={() => void reload()} className="ml-3 underline">{t("Повторить")}</button>
   </div>;
@@ -70,7 +72,7 @@ function Root() {
     <div className="min-h-dvh">
       {errorBanner}
       <Header view={view} onNavigate={navigate} bookingCount={myBookingCount} />
-      {user.role === "master" ? (
+      {!ready ? pending : user.role === "master" ? (
         <UoDashboard />
       ) : view === "profile" ? (
         <ProfilePage onBack={() => navigate("search")} />
@@ -84,6 +86,8 @@ function Root() {
 }
 
 export default function App() {
+  const path = window.location.pathname.replace(/\/+$/, "");
+  const isGuardRoute = path === "/guard";
   const [language, setLanguage] = useState<Language>(() => {
     try {
       return localStorage.getItem("plyacouka-language") === "be" ? "be" : "ru";
@@ -91,6 +95,8 @@ export default function App() {
       return "ru";
     }
   });
+
+  useLayoutEffect(trackDialogOpeners, []);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -104,9 +110,11 @@ export default function App() {
 
   return (
     <LanguageProvider value={{ language, setLanguage }}>
-      <AppProvider>
-        <Root />
-      </AppProvider>
+      {path === "/privacy" ? <PrivacyPolicy /> : (
+        <AppProvider initialize={!isGuardRoute}>
+          <Root isGuardRoute={isGuardRoute} />
+        </AppProvider>
+      )}
     </LanguageProvider>
   );
 }

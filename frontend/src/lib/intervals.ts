@@ -11,6 +11,10 @@ export function timeToMinutes(value: string): number | null {
   return hour <= 23 && minute <= 59 ? hour * 60 + minute : null;
 }
 
+export function minutesToTime(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
 export function isValidAvailabilityWindow(startTime: string, endTime: string): boolean {
   const start = timeToMinutes(startTime);
   const end = timeToMinutes(endTime);
@@ -23,6 +27,10 @@ export function isValidAvailabilityWindow(startTime: string, endTime: string): b
 export function isRangeAvailable(
   slots: Slot[], listingId: number, date: string, startTime: string, endTime: string,
 ): boolean {
+  return isDayRangeAvailable(slots.filter((slot) => slot.listingId === listingId && slot.date === date), startTime, endTime);
+}
+
+export function isDayRangeAvailable(daySlots: Slot[], startTime: string, endTime: string): boolean {
   const start = timeToMinutes(startTime);
   const end = timeToMinutes(endTime);
   if (
@@ -30,11 +38,7 @@ export function isRangeAvailable(
     end - start < MIN_BOOKING_MINUTES ||
     start % BOOKING_STEP_MINUTES !== 0 || end % BOOKING_STEP_MINUTES !== 0
   ) return false;
-  const daySlots = slots.filter((slot) => slot.listingId === listingId && slot.date === date);
-  if (daySlots.length === 0) return false;
-  const opening = Math.min(...daySlots.map((slot) => timeToMinutes(slot.startTime) ?? 0));
-  const closing = Math.max(...daySlots.map((slot) => timeToMinutes(slot.endTime) ?? 0));
-  if (start < opening || end > closing || daySlots.some((slot) =>
+  if (daySlots.some((slot) =>
     slot.state === 1 && start < (timeToMinutes(slot.endTime) ?? 0) && end > (timeToMinutes(slot.startTime) ?? 0),
   )) return false;
 

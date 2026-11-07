@@ -5,8 +5,9 @@ from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import Select, and_, extract, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from api.dependencies import get_current_school, get_current_tenant
 from core.config import settings
@@ -16,20 +17,27 @@ from core.uo_demo import UO_DEMO_SCHOOL, UO_DEMO_USER_ID
 from db.database import get_db
 from db.models import Booking, RoomListing, User
 from schemas.booking import (
+    AvailableRange,
     AvailableRoomItem,
     AvailableSlotInfo,
     BookingCreate,
     BookingDetails,
     BookingInterval,
+    BookingListingSummary,
     BookingResponse,
     BookingState,
     BookingStateUpdate,
+    CatalogDay,
+    CatalogRoom,
+    CompactCatalog,
+    CompactCatalogRoom,
     CustomerSearch,
     CustomerSuggestion,
     RentalAgreement,
     ReservedVisit,
     RoomType,
     TenantBookingResponse,
+    UoBookingSummary,
     WeeklyReservationCreate,
     WeeklyReservationEnd,
     WeeklyReservationLink,
@@ -38,6 +46,8 @@ from schemas.booking import (
 
 router = APIRouter(prefix="/api/v1", tags=["Помещения и бронирования"])
 RESERVED_VISIT_DAYS = 14
+BOOKING_HORIZON_DAYS = 30
+MAX_UPCOMING_BOOKINGS = 10
 
 DEFAULT_ROOM_IMAGES: dict[str, str] = {
     "sport_hall": "https://images.pexels.com/photos/7201151/pexels-photo-7201151.jpeg?auto=compress&cs=tinysrgb&w=1200",
@@ -78,99 +88,223 @@ def occupancy():
     return select(Booking).where(Booking.state != BookingState.cancelled.value)
 
 
+def upcoming_booking(now: datetime.datetime):
+    return and_(
+        Booking.state.not_in((BookingState.cancelled.value, BookingState.completed.value)),
+        or_(Booking.date > now.date(), and_(Booking.date == now.date(), Booking.end_time > now.time())),
+    )
+
+
 @router.get("/rooms/available", response_model=list[AvailableRoomItem])
 async def get_available_rooms(
     date: datetime.date = Query(...),
     type_room: RoomType = Query(...),
     db: AsyncSession = Depends(get_db),
 ) -> list[AvailableRoomItem]:
-    return await catalog_availability(db, date, 1, type_room)
+    listings = visible_listings().where(RoomListing.type_room == type_room.value)
+    return await catalog_availability(db, date, 1, listings)
 
 
-@router.get("/rooms/catalog", response_model=list[AvailableRoomItem])
+@router.get("/rooms/catalog")
 async def get_catalog(
     start: Annotated[datetime.date, Query()],
     days: Annotated[int, Query(ge=1, le=7)] = 7,
+    compact: bool = False,
+    city: Annotated[str | None, Query(max_length=100)] = None,
+    city_district: Annotated[str | None, Query(max_length=100)] = None,
+    type_room: RoomType | None = None,
+    school: Annotated[str | None, Query(max_length=255)] = None,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
+    limit: Annotated[int | None, Query(ge=1, le=250)] = None,
     db: AsyncSession = Depends(get_db),
-) -> list[AvailableRoomItem]:
+) -> list[AvailableRoomItem] | CompactCatalog:
     if start > datetime.date.max - datetime.timedelta(days=days - 1):
         raise HTTPException(status_code=422, detail="Диапазон дат выходит за пределы календаря.")
-    return await catalog_availability(db, start, days)
+    listings = visible_listings()
+    if not compact:
+        return await catalog_availability(db, start, days, listings)
+
+    for column, value in (
+        (RoomListing.city, city), (RoomListing.city_district, city_district),
+        (RoomListing.type_room, type_room.value if type_room is not None else None),
+        (RoomListing.school, school),
+    ):
+        if value is not None:
+            listings = listings.where(column == value)
+    total = None
+    if offset or limit is not None:
+        total = await db.scalar(listings.with_only_columns(func.count(RoomListing.id)))
+        listings = listings.offset(offset).limit(limit)
+    return await compact_catalog_availability(db, start, days, listings, total)
 
 
-async def catalog_availability(
-    db: AsyncSession, start: datetime.date, days: int, type_room: RoomType | None = None,
-) -> list[AvailableRoomItem]:
+async def catalog_ranges(
+    db: AsyncSession, start: datetime.date, days: int, listing_query: Select[tuple[RoomListing]],
+) -> list[tuple[CatalogRoom, list[CatalogDay]]]:
     dates = [start + datetime.timedelta(days=offset) for offset in range(days)]
-    listing_query = visible_listings().order_by(RoomListing.id)
-    if type_room is not None:
-        listing_query = listing_query.where(RoomListing.type_room == type_room.value)
+    listing_query = listing_query.order_by(RoomListing.id)
     listings = (await db.scalars(listing_query)).all()
     if not listings:
         return []
 
-    active = (await db.scalars(occupancy().where(
-        Booking.listing_id.in_([listing.id for listing in listings]),
+    active = occupancy().with_only_columns(
+        Booking.listing_id, Booking.date, Booking.start_time, Booking.end_time,
+        Booking.series_label, Booking.series_ends_on,
+    ).where(
+        Booking.listing_id.in_(listing_query.with_only_columns(RoomListing.id)),
         Booking.date <= dates[-1],
         or_(Booking.series_ends_on.is_(None), Booking.series_ends_on >= start),
-        or_(Booking.date >= start, Booking.series_label.is_not(None)),
-    ))).all()
-    occupied_by_date: dict[datetime.date, dict[int, list[Booking]]] = {}
-    for booking in active:
-        booking_days = [booking.date] if booking.series_label is None else [
-            day for day in dates if day >= booking.date and day.weekday() == booking.date.weekday()
-            and (booking.series_ends_on is None or day <= booking.series_ends_on)
+    )
+    orders = await db.execute(union_all(
+        active.where(Booking.series_label.is_(None), Booking.date >= start),
+        active.where(Booking.series_label.is_not(None)),
+    ))
+    occupied: dict[tuple[int, datetime.date], list[tuple[datetime.time, datetime.time]]] = {}
+    for listing_id, date, starts_at, ends_at, series_label, series_ends_on in orders:
+        booking_days = [date] if series_label is None else [
+            day for day in dates if day >= date and day.weekday() == date.weekday()
+            and (series_ends_on is None or day <= series_ends_on)
         ]
         for day in booking_days:
-            occupied_by_date.setdefault(day, {}).setdefault(booking.listing_id, []).append(booking)
+            occupied.setdefault((listing_id, day), []).append((starts_at, ends_at))
 
     now = minsk_now()
-    return [room for day in dates for room in render_availability(listings, day, occupied_by_date.get(day, {}), now)]
+    return [
+        (catalog_room(listing), [
+            CatalogDay(date=day, ranges=available_ranges(listing, day, occupied.get((listing.id, day), []), now))
+            for day in dates
+        ])
+        for listing in listings
+    ]
 
 
-def render_availability(
-    listings: list[RoomListing], date: datetime.date, occupied: dict[int, list[Booking]], now: datetime.datetime,
+async def catalog_availability(
+    db: AsyncSession, start: datetime.date, days: int, listing_query: Select[tuple[RoomListing]],
 ) -> list[AvailableRoomItem]:
-    step = 15
+    rooms = await catalog_ranges(db, start, days, listing_query)
     result = []
-    for listing in listings:
-        reservations = occupied.get(listing.id, [])
-        free_slots = []
-        start_minute = listing.available_from.hour * 60 + listing.available_from.minute
-        if listing.available_from.second or listing.available_from.microsecond:
-            start_minute += 1
-        start_minute = max(14 * 60, ((start_minute + step - 1) // step) * step)
-        end_minute = min(21 * 60, listing.available_to.hour * 60 + listing.available_to.minute)
-        for minute in range(start_minute, end_minute - step + 1, step):
-            start = datetime.time(minute // 60, minute % 60)
-            if datetime.datetime.combine(date, start) <= now:
-                continue
-            end = add_minutes(start, step)
-            if not any(booking.start_time < end and booking.end_time > start for booking in reservations):
-                free_slots.append(AvailableSlotInfo(start_time=start, end_time=end, price=listing.price / 4))
-        result.append(AvailableRoomItem(
-            id=listing.id, school=listing.school, type_room=listing.type_room, room=listing.room,
-            date=date, price=listing.price, capacity=listing.capacity, address=listing.address,
-            city=listing.city, city_district=listing.city_district,
-            uo=listing.uo, owner_id=listing.owner_id or (
-                UO_DEMO_USER_ID if listing.school == UO_DEMO_SCHOOL else None
-            ),
-            available_from=listing.available_from, available_to=listing.available_to,
-            image_url=listing.image_url or DEFAULT_ROOM_IMAGES.get(listing.type_room, "/room-placeholder.svg"),
-            available_slots=free_slots,
-        ))
+    for index in range(days):
+        for room, availability in rooms:
+            day = availability[index]
+            slots = []
+            for interval in day.ranges:
+                starts_at = interval.start_time
+                while starts_at < interval.end_time:
+                    ends_at = add_minutes(starts_at, 15)
+                    slots.append(AvailableSlotInfo(start_time=starts_at, end_time=ends_at, price=room.price / 4))
+                    starts_at = ends_at
+            result.append(AvailableRoomItem(**room.model_dump(), date=day.date, available_slots=slots))
     return result
 
 
+async def compact_catalog_availability(
+    db: AsyncSession, start: datetime.date, days: int, listing_query: Select[tuple[RoomListing]], total: int | None,
+) -> CompactCatalog:
+    rooms = await catalog_ranges(db, start, days, listing_query)
+    return CompactCatalog(
+        listings=[CompactCatalogRoom(**room.model_dump(), availability=availability) for room, availability in rooms],
+        total=total if total is not None else len(rooms),
+    )
+
+
+def catalog_room(listing: RoomListing) -> CatalogRoom:
+    return CatalogRoom(
+        id=listing.id, school=listing.school, type_room=listing.type_room, room=listing.room,
+        price=listing.price, capacity=listing.capacity, address=listing.address,
+        city=listing.city, city_district=listing.city_district,
+        uo=listing.uo, owner_id=listing.owner_id or (
+            UO_DEMO_USER_ID if listing.school == UO_DEMO_SCHOOL else None
+        ),
+        available_from=listing.available_from, available_to=listing.available_to,
+        image_url=listing.image_url or DEFAULT_ROOM_IMAGES.get(listing.type_room, "/room-placeholder.svg"),
+    )
+
+
+def available_ranges(
+    listing: RoomListing, date: datetime.date, reserved: list[tuple[datetime.time, datetime.time]],
+    now: datetime.datetime,
+) -> list[AvailableRange]:
+    if date < now.date():
+        return []
+    start_minute = listing.available_from.hour * 60 + listing.available_from.minute
+    if listing.available_from.second or listing.available_from.microsecond:
+        start_minute += 1
+    start_minute = max(14 * 60, ((start_minute + 14) // 15) * 15)
+    end_minute = min(21 * 60, listing.available_to.hour * 60 + listing.available_to.minute)
+    ranges: list[AvailableRange] = []
+    for minute in range(start_minute, end_minute - 14, 15):
+        start = datetime.time(minute // 60, minute % 60)
+        end = add_minutes(start, 15)
+        if (date == now.date() and start <= now.time()) or any(
+            occupied_start < end and occupied_end > start for occupied_start, occupied_end in reserved
+        ):
+            continue
+        if ranges and ranges[-1].end_time == start:
+            ranges[-1].end_time = end
+        else:
+            ranges.append(AvailableRange(start_time=start, end_time=end))
+    return ranges
+
+
 @router.get("/uo/bookings")
-async def uo_bookings(current_user: User = Depends(get_current_school), db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(select(Booking, User).join(User, Booking.user_id == User.user_id)
-        .where(Booking.listing_id.in_(owned_listing(current_user, include_archived=True).with_only_columns(RoomListing.id)),
-               Booking.series_label.is_(None))
-        .order_by(Booking.date, Booking.start_time))).all()
+async def uo_bookings(
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
+    limit: Annotated[int | None, Query(ge=1, le=250)] = None,
+    upcoming: bool | None = None,
+    current_user: User = Depends(get_current_school),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (select(Booking, User.name, User.phone, User.id).join(User, Booking.user_id == User.user_id)
+        .options(defer(Booking.agreement_text, raiseload=True))
+        .where(*school_booking_scope(current_user)))
+    if upcoming is not None:
+        active = upcoming_booking(minsk_now())
+        stmt = stmt.where(active if upcoming else ~active)
+    if upcoming is False:
+        stmt = stmt.order_by(Booking.date.desc(), Booking.start_time.desc(), Booking.id.desc())
+    else:
+        stmt = stmt.order_by(Booking.date, Booking.start_time, Booking.id)
+    if offset or limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
+    rows = await db.execute(stmt)
     return [{**BookingResponse.model_validate(booking).model_dump(mode="json"),
-             "customer_name": tenant.name, "customer_phone": tenant.phone, "customer_id": tenant.id}
-            for booking, tenant in rows]
+             "customer_name": booking.visitor_name if booking.visitor_name is not None else name,
+             "customer_phone": booking.visitor_phone if booking.visitor_phone is not None else phone,
+             "customer_id": customer_id}
+            for booking, name, phone, customer_id in rows]
+
+
+def school_booking_scope(user: User):
+    return (
+        Booking.listing_id.in_(owned_listing(user, include_archived=True).with_only_columns(RoomListing.id)),
+        Booking.series_label.is_(None),
+    )
+
+
+@router.get("/uo/bookings/summary")
+async def uo_booking_summary(
+    current_user: User = Depends(get_current_school), db: AsyncSession = Depends(get_db),
+) -> UoBookingSummary:
+    duration = (
+        (extract("hour", Booking.end_time) - extract("hour", Booking.start_time)) * 60
+        + extract("minute", Booking.end_time) - extract("minute", Booking.start_time)
+    )
+    revenue_state = Booking.state != BookingState.cancelled.value
+    rows = (await db.execute(select(
+        Booking.listing_id,
+        func.count().label("booking_count"),
+        func.count().filter(upcoming_booking(minsk_now())).label("upcoming_count"),
+        func.sum(duration).filter(revenue_state).label("minutes"),
+        func.sum(Booking.price).filter(revenue_state).label("revenue"),
+    ).where(*school_booking_scope(current_user)).group_by(Booking.listing_id).order_by(Booking.listing_id))).all()
+    return UoBookingSummary(
+        total=sum(row.booking_count for row in rows),
+        total_hours=float(sum(row.minutes or 0 for row in rows) / 60),
+        total_revenue=sum((row.revenue or Decimal(0) for row in rows), Decimal(0)),
+        listings=[BookingListingSummary(
+            listing_id=row.listing_id, count=row.booking_count, has_active_bookings=row.upcoming_count > 0,
+        ) for row in rows],
+    )
 
 
 @router.patch("/uo/bookings/{booking_id}/cancel", response_model=BookingResponse)
@@ -209,6 +343,12 @@ def validate_interval(payload: BookingInterval, listing: RoomListing) -> datetim
     if payload.start_time < listing.available_from or end > listing.available_to:
         raise HTTPException(status_code=400, detail="Выбранное время недоступно для этого помещения.")
     return end
+
+def validate_tenant_interval(payload: BookingDetails, listing: RoomListing) -> datetime.time:
+    if (payload.date - minsk_now().date()).days > BOOKING_HORIZON_DAYS:
+        raise HTTPException(status_code=422, detail="Бронировать можно не более чем на 30 дней вперёд.")
+    return validate_interval(payload, listing)
+
 
 
 async def tenant_listing(payload: BookingDetails, user: User, db: AsyncSession, *, lock: bool = False) -> RoomListing:
@@ -256,7 +396,7 @@ async def preview_agreement(
     db: AsyncSession = Depends(get_db),
 ) -> RentalAgreement:
     listing = await tenant_listing(payload, current_user, db)
-    end = validate_interval(payload, listing)
+    end = validate_tenant_interval(payload, listing)
     await validate_reserved_visit(db, payload, listing, end)
     return build_rental_agreement(listing, current_user, payload, end)
 
@@ -271,9 +411,11 @@ async def create_booking(
     current_user: User = Depends(get_current_tenant),
     db: AsyncSession = Depends(get_db),
 ) -> list[Booking]:
+    # Serialise quota checks even when this tenant books different rooms concurrently.
+    await db.scalar(select(User.id).where(User.id == current_user.id).with_for_update())
     # Regular orders and weekly reservations lock the same listing before checking overlaps.
     listing = await tenant_listing(payload, current_user, db, lock=True)
-    end = validate_interval(payload, listing)
+    end = validate_tenant_interval(payload, listing)
     await validate_reserved_visit(db, payload, listing, end)
     if not payload.agreement_accepted:
         raise HTTPException(status_code=400, detail="Примите условия договора аренды.")
@@ -287,6 +429,15 @@ async def create_booking(
     if any(booking.id != payload.reservation_id and booking.date.weekday() == payload.date.weekday() for booking in candidates):
         raise HTTPException(status_code=409, detail="Выбранное время уже занято разовой или еженедельной бронью.")
 
+    now = minsk_now()
+    upcoming_count = await db.scalar(select(func.count()).select_from(Booking).where(
+        Booking.user_id == current_user.user_id,
+        Booking.series_label.is_(None),
+        upcoming_booking(now),
+    ))
+    if upcoming_count >= MAX_UPCOMING_BOOKINGS:
+        raise HTTPException(status_code=409, detail="У вас уже 10 предстоящих броней. Отмените одну из них, чтобы оформить новую.")
+
     price = (listing.price * Decimal(str(payload.hours))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if price > Decimal("99999999.99"):
         raise HTTPException(status_code=422, detail="Стоимость брони слишком велика. Выберите интервал короче.")
@@ -298,6 +449,8 @@ async def create_booking(
         reservation_id=payload.reservation_id,
         agreement_version=agreement.version, agreement_text=agreement.text,
         agreement_accepted_at=datetime.datetime.now(datetime.UTC),
+        visitor_name=current_user.name,
+        visitor_phone=current_user.phone,
     )
     db.add(booking)
     await db.commit()
@@ -354,8 +507,13 @@ async def customer_suggestions(
     national_digits = len(prefix) - (4 if prefix.startswith("+375") else 1)
     if national_digits < 6:
         return []
+    school_listings = owned_listing(current_user, include_archived=True).with_only_columns(RoomListing.id)
+    has_school_history = select(Booking.id).where(
+        Booking.listing_id.in_(school_listings),
+        or_(Booking.user_id == User.user_id, Booking.series_tenant_id == User.user_id),
+    ).exists()
     matches = (await db.execute(select(User.user_id, User.phone, User.name).where(
-        User.role == "tenant", User.password_hash.is_not(None), User.phone.startswith(prefix),
+        User.role == "tenant", User.password_hash.is_not(None), User.phone.startswith(prefix), has_school_history,
     ).order_by(User.phone, User.name, User.user_id).limit(5))).all()
     return [CustomerSuggestion(user_id=user_id, phone=phone, name=name) for user_id, phone, name in matches]
 
@@ -517,6 +675,9 @@ async def reserved_visits(current_user: User = Depends(get_current_tenant), db: 
 )
 async def get_user_bookings(
     user_id: str,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
+    limit: Annotated[int | None, Query(ge=1, le=250)] = None,
+    upcoming: bool | None = None,
     current_user: User = Depends(get_current_tenant),
     db: AsyncSession = Depends(get_db),
 ) -> list[Booking]:
@@ -526,8 +687,13 @@ async def get_user_bookings(
     stmt = (
         select(Booking)
         .where(Booking.user_id == user_id, Booking.series_label.is_(None))
-        .order_by(Booking.date.desc(), Booking.start_time.desc())
+        .order_by(Booking.date.desc(), Booking.start_time.desc(), Booking.id.desc())
     )
+    if upcoming is not None:
+        active = upcoming_booking(minsk_now())
+        stmt = stmt.where(active if upcoming else ~active)
+    if offset or limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
     bookings = (await db.execute(stmt)).scalars().all()
     return list(bookings)
 

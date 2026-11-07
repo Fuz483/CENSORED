@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
     proxy: {
       "/api": { target: env.API_PROXY_TARGET || "http://127.0.0.1:8000", changeOrigin: true },
       "/health": { target: env.API_PROXY_TARGET || "http://127.0.0.1:8000", changeOrigin: true },
+      "/ready": { target: env.API_PROXY_TARGET || "http://127.0.0.1:8000", changeOrigin: true },
       "/media": { target: env.API_PROXY_TARGET || "http://127.0.0.1:8000", changeOrigin: true },
     },
   },

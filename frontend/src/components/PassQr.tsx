@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 import QRCode from "qrcode";
 import { useLanguage } from "../lib/i18n";
 
 export function PassQr({
+  bookingId,
   code,
   large = false,
   showCode = true,
 }: {
+  bookingId: number;
   code: string;
   large?: boolean;
   showCode?: boolean;
@@ -42,6 +45,12 @@ export function PassQr({
       )}
       {(showCode || (qr && !qr.url)) && (
         <p className="max-w-full break-all font-mono text-[14px] leading-relaxed text-ink-mute">{code}</p>
+      )}
+      {qr?.url && (
+        <a href={qr.url} download={`qr-pass-${bookingId}.png`} className="btn btn-quiet">
+          <Download className="size-4" aria-hidden="true" />
+          {t("Скачать QR-код")}
+        </a>
       )}
     </div>
   );

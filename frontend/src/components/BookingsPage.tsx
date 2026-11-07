@@ -16,6 +16,7 @@ import { useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
 import { PassQr } from "./PassQr";
 import { BookingModal } from "./BookingModal";
+import { BookingHistoryMore } from "./BookingHistoryMore";
 import { useDialog } from "../hooks/useDialog";
 import type { ReservedVisit } from "../lib/types";
 
@@ -34,7 +35,7 @@ const statusStyles = {
 };
 
 export function BookingsPage({ onSearch }: { onSearch: () => void }) {
-  const { bookings, listings, reservedVisits, user, cancelBooking, reload } = useApp();
+  const { bookings, hasMoreBookings, listings, reservedVisits, user, cancelBooking, reload } = useApp();
   const { t, language } = useLanguage();
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -98,7 +99,7 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
             </h1>
             <p className="mt-2 text-[16px] text-ink-soft">
               {myBookings.length > 0
-                ? `${myBookings.length} ${plural(myBookings.length, [
+                ? `${hasMoreBookings ? t("Показано: ") : ""}${myBookings.length} ${plural(myBookings.length, [
                     t("бронь"),
                     t("брони"),
                     t("броней"),
@@ -275,6 +276,8 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
             })}
           </div>
 
+          <BookingHistoryMore />
+
           <p className="mt-5 max-w-[70ch] text-[14px] leading-relaxed text-ink-mute">
             {t("Отмена доступна не позднее чем за 2 часа до начала. QR-пропуск выдаётся сразу после бронирования.")}
           </p>
@@ -375,7 +378,7 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
               </p>
             </div>
             <div className="mt-5 rounded-lg border border-line bg-paper/50 p-4 sm:p-5">
-              <PassQr code={selectedQr.code} large showCode={false} />
+              <PassQr bookingId={selectedQr.bookingId} code={selectedQr.code} large showCode={false} />
             </div>
             <p className="mt-4 text-center text-[15px] text-ink-soft">{t("Покажите код при входе в помещение.")}</p>
           </section>

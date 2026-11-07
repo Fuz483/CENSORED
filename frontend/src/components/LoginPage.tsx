@@ -323,6 +323,11 @@ export function LoginPage() {
                       className="auth-dialog-field field" />
                   </div>
                 )}
+                {registering && (
+                  <a href="/privacy" target="_blank" rel="noopener" className="archive-link text-sm">
+                    {t("Политика обработки персональных данных")}
+                  </a>
+                )}
                 {error && <p id="login-error" role="alert" className="border-l-2 border-orange pl-2 text-sm leading-relaxed text-ink">{t(error)}</p>}
                 <button type="submit" disabled={submitting || (registering && !captcha) || (schoolLogin && (institutionStatus !== "ready" || !institutionId))} className="btn btn-primary h-11 w-full">{submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}</button>
               </form>
@@ -345,6 +350,7 @@ export function LoginPage() {
           <Logo />
           <div className="flex flex-wrap items-center gap-4 font-mono text-[13px] tracking-[0.08em] uppercase text-ink-mute">
             <span>{t("Беларусь · 2026")}</span>
+            <a href="/privacy" className="archive-link">{t("Конфиденциальность")}</a>
             <a href="/guard" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-ink/20 px-2.5 font-sans text-[14px] font-semibold tracking-normal normal-case text-ink transition-colors hover:border-ink hover:bg-ink hover:text-paper">
               <ScanLine className="size-3.5" aria-hidden="true" />
               {t("Перейти к сканеру")}

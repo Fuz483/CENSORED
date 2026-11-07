@@ -167,7 +167,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
 
             {created.filter((booking) => booking.state === "confirmed" && booking.code).map((booking) => (
               <div key={booking.id} className="mt-4 rounded-lg border border-line bg-paper/50 px-4 py-5">
-                <PassQr code={booking.code!} />
+                <PassQr bookingId={booking.id} code={booking.code!} />
               </div>
             ))}
 

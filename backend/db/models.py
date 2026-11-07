@@ -2,6 +2,7 @@ import datetime
 from decimal import Decimal
 from typing import List, Optional
 from sqlalchemy import (
+    BigInteger,
     Date,
     DateTime,
     Boolean,
@@ -18,6 +19,29 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.database import Base
+
+
+class RevokedSession(Base):
+    __tablename__ = "revoked_sessions"
+
+    token_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    expires_at: Mapped[int] = mapped_column(BigInteger, index=True)
+
+
+class CaptchaChallenge(Base):
+    __tablename__ = "captcha_challenges"
+
+    challenge_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    answer_digest: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[int] = mapped_column(BigInteger, index=True)
+
+
+class AuthRateLimit(Base):
+    __tablename__ = "auth_rate_limits"
+
+    bucket: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(BigInteger, index=True)
 
 
 class User(Base):
@@ -43,6 +67,7 @@ class User(Base):
     email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
     passport_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    erasure_requested_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     rating: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
 
@@ -58,6 +83,23 @@ class Booking(Base):
     """Разовый заказ арендатора или еженедельный резерв школы."""
 
     __tablename__ = "orders"
+    __table_args__ = (
+        Index(
+            "ix_orders_recurring_listing_date", "listing_id", "date",
+            postgresql_where=text("series_label IS NOT NULL"),
+            sqlite_where=text("series_label IS NOT NULL"),
+        ),
+        Index(
+            "ix_orders_tenant_history", "user_id", "date", "start_time", "id",
+            postgresql_where=text("series_label IS NULL"),
+            sqlite_where=text("series_label IS NULL"),
+        ),
+        Index(
+            "ix_orders_listing_history", "listing_id", "date", "start_time", "id",
+            postgresql_where=text("series_label IS NULL"),
+            sqlite_where=text("series_label IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
@@ -89,6 +131,8 @@ class Booking(Base):
     agreement_version: Mapped[Optional[str]] = mapped_column(String(32))
     agreement_text: Mapped[Optional[str]] = mapped_column(Text)
     agreement_accepted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))
+    visitor_name: Mapped[Optional[str]] = mapped_column(String(255))
+    visitor_phone: Mapped[Optional[str]] = mapped_column(String(32))
 
     user: Mapped["User"] = relationship("User", back_populates="bookings", foreign_keys=[user_id])
 
@@ -124,4 +168,5 @@ class RoomListing(Base):
     image_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     photo_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, deferred=True)
     photo_type: Mapped[Optional[str]] = mapped_column(String(32))
+    photo_sanitized: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), default=False)
     archived_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))

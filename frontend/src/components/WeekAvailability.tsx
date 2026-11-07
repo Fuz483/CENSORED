@@ -1,5 +1,7 @@
-import { nextDays, toISODate } from "../lib/data";
-import { longDate, weekdayShort } from "../lib/format";
+import { useMemo } from "react";
+
+import { nextDays } from "../lib/data";
+import { longDate, minskDate, weekdayShort } from "../lib/format";
 import { freeSlotHours, useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
 
@@ -8,14 +10,13 @@ import { useLanguage } from "../lib/i18n";
  * slot data the catalog uses. No decorative fake numbers.
  */
 export function WeekAvailability({ className = "" }: { className?: string }) {
-  const { slots, listings, loadError } = useApp();
+  const { slotsByDate, listings, loadError, ready } = useApp();
   const { t, language } = useLanguage();
-  const days = nextDays(7).map(toISODate);
-
-  const rows = days.map((date) => ({
+  const today = minskDate();
+  const rows = useMemo(() => nextDays(7, today).map((date) => ({
     date,
-    count: freeSlotHours(slots.filter((slot) => slot.date === date)),
-  }));
+    count: [...(slotsByDate.get(date)?.values() ?? [])].reduce((sum, slots) => sum + freeSlotHours(slots), 0),
+  })), [slotsByDate, today]);
 
   const total = rows.reduce((sum, row) => sum + row.count, 0);
   const peak = Math.max(...rows.map(({ count }) => count));
@@ -26,6 +27,7 @@ export function WeekAvailability({ className = "" }: { className?: string }) {
   const axisTicks = [4, 3, 2, 1, 0].map((level) => level * step);
 
   if (loadError && !listings.length) return <p role="status" className="border-t border-on-navy/25 py-6 text-on-navy/75">{t("Нет данных")}</p>;
+  if (!ready) return <p role="status" className="border-t border-on-navy/25 py-6 text-on-navy/75">{t("Подождите…")}</p>;
 
   return (
     <div className={`min-w-0 ${className}`}>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { BookingRequest, Listing, Slot } from "../lib/types";
 import { durationLabel, intervalHours, intervalPrice, money } from "../lib/format";
-import { BOOKING_STEP_MINUTES, isRangeAvailable, MIN_BOOKING_MINUTES, timeToMinutes } from "../lib/intervals";
+import { BOOKING_STEP_MINUTES, isDayRangeAvailable, MIN_BOOKING_MINUTES, minutesToTime, timeToMinutes } from "../lib/intervals";
 import { useLanguage } from "../lib/i18n";
 
 export function IntervalPicker({
@@ -47,7 +47,7 @@ export function IntervalPicker({
       return merged;
     }, []);
   const firstWindow = availableRanges.find(({ start, end }) => end - start >= MIN_BOOKING_MINUTES);
-  const initialStart = firstWindow ? formatTime(minMinutes + firstWindow.start) : min;
+  const initialStart = firstWindow ? minutesToTime(minMinutes + firstWindow.start) : min;
   const initialEnd = nextHour(initialStart);
   const [startTime, setStartTime] = useState(selected?.startTime ?? initialStart);
   const [endTime, setEndTime] = useState(selected?.endTime ?? initialEnd);
@@ -71,15 +71,15 @@ export function IntervalPicker({
     : maxIndex;
   const startPercent = (startIndex / maxIndex) * 100;
   const endPercent = (endIndex / maxIndex) * 100;
-  const valid = isRangeAvailable(slots, listing.id, date, startTime, endTime);
+  const valid = isDayRangeAvailable(times, startTime, endTime);
 
   const updateStart = (index: number) => {
     const bounded = clamp(index, 0, endIndex - minDurationSteps);
-    update(formatTime(minMinutes + bounded * BOOKING_STEP_MINUTES), endTime);
+    update(minutesToTime(minMinutes + bounded * BOOKING_STEP_MINUTES), endTime);
   };
   const updateEnd = (index: number) => {
     const bounded = clamp(index, startIndex + minDurationSteps, maxIndex);
-    update(startTime, formatTime(minMinutes + bounded * BOOKING_STEP_MINUTES));
+    update(startTime, minutesToTime(minMinutes + bounded * BOOKING_STEP_MINUTES));
   };
   const update = (nextStart: string, nextEnd: string) => {
     setStartTime(nextStart);
@@ -179,7 +179,7 @@ export function IntervalPicker({
         </div>
         <div className="flex justify-between text-sm font-semibold tabular-nums text-ink-soft sm:text-base" aria-hidden="true">
           <span>{min}</span>
-          <span>{formatTime(minMinutes + Math.round(maxIndex / 2) * BOOKING_STEP_MINUTES)}</span>
+          <span>{minutesToTime(minMinutes + Math.round(maxIndex / 2) * BOOKING_STEP_MINUTES)}</span>
           <span>{max}</span>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-ink-soft">
@@ -221,11 +221,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function formatTime(minutes: number): string {
-  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-}
-
 function nextHour(value: string): string {
   const minutes = (timeToMinutes(value) ?? 14 * 60) + MIN_BOOKING_MINUTES;
-  return formatTime(minutes);
+  return minutesToTime(minutes);
 }

@@ -31,29 +31,54 @@ const WEEKDAYS_FULL = [
 const WEEKDAYS_FULL_BE = ["нядзелю", "панядзелак", "аўторак", "сераду", "чацвер", "пятніцу", "суботу"];
 type FormatLanguage = "ru" | "be";
 
-function parseISO(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d);
+export const MINSK_TIME_ZONE = "Europe/Minsk";
+const minskClockFormatter = new Intl.DateTimeFormat("en", {
+  timeZone: MINSK_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+export function minskClock(instant = new Date()): { date: string; time: string } {
+  const parts = Object.fromEntries(minskClockFormatter.formatToParts(instant).map(({ type, value }) => [type, value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+
+export function minskDate(instant = new Date()): string {
+  return minskClock(instant).date;
+}
+
+export function addCalendarDays(iso: string, days: number): string {
+  const date = new Date(iso);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function weekdayIndex(iso: string): number {
+  return new Date(iso).getUTCDay();
 }
 
 export function dayNumber(iso: string): number {
-  return parseISO(iso).getDate();
+  return new Date(iso).getUTCDate();
 }
 
 export function weekdayShort(iso: string, language: FormatLanguage = "ru"): string {
-  return (language === "be" ? WEEKDAYS_SHORT_BE : WEEKDAYS_SHORT_RU)[parseISO(iso).getDay()];
+  return (language === "be" ? WEEKDAYS_SHORT_BE : WEEKDAYS_SHORT_RU)[weekdayIndex(iso)];
 }
 
 export function weekdayFull(iso: string, language: FormatLanguage = "ru"): string {
-  return (language === "be" ? WEEKDAYS_FULL_BE : WEEKDAYS_FULL)[parseISO(iso).getDay()];
+  return (language === "be" ? WEEKDAYS_FULL_BE : WEEKDAYS_FULL)[weekdayIndex(iso)];
 }
 
 export function monthShort(iso: string, language: FormatLanguage = "ru"): string {
-  return (language === "be" ? MONTHS_SHORT_BE : MONTHS_SHORT_RU)[parseISO(iso).getMonth()];
+  return (language === "be" ? MONTHS_SHORT_BE : MONTHS_SHORT_RU)[new Date(iso).getUTCMonth()];
 }
 
 export function monthLong(iso: string, language: FormatLanguage = "ru"): string {
-  return (language === "be" ? MONTHS_LONG_BE : MONTHS_LONG_RU)[parseISO(iso).getMonth()];
+  return (language === "be" ? MONTHS_LONG_BE : MONTHS_LONG_RU)[new Date(iso).getUTCMonth()];
 }
 
 export function dayLabel(iso: string, index: number, language: FormatLanguage = "ru"): string {
@@ -101,7 +126,12 @@ export function intervalLabel(startTime: string, endTime: string): string {
 }
 
 export function minskBookingTime(date: string, time: string): number {
-  return Date.parse(`${date}T${time.slice(0, 5)}:00+03:00`);
+  // Use UTC as a reference to find the Minsk offset for the booking day.
+  const reference = Date.parse(`${date}T${time.slice(0, 5)}:00Z`);
+  if (!Number.isFinite(reference)) return reference;
+  const local = minskClock(new Date(reference));
+  const offset = Date.parse(`${local.date}T${local.time}:00Z`) - reference;
+  return reference - offset;
 }
 
 export function money(value: number): string {

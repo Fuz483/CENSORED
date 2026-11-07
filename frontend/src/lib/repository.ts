@@ -61,8 +61,22 @@ export interface AppSnapshot {
   listings: Listing[];
   slots: Slot[];
   bookings: Booking[];
+  nextBookingHistoryOffset?: number | null;
+  uoBookingSummary?: UoBookingSummary | null;
   weeklyReservations?: WeeklyReservation[];
   reservedVisits?: ReservedVisit[];
+}
+
+export interface BookingHistoryPage {
+  bookings: Booking[];
+  nextOffset: number | null;
+}
+
+export interface UoBookingSummary {
+  total: number;
+  totalHours: number;
+  totalRevenue: number;
+  listings: { listingId: number; count: number; hasActiveBookings: boolean }[];
 }
 
 /**
@@ -70,16 +84,20 @@ export interface AppSnapshot {
  * REST, or another transport; UI components must not depend on transport details.
  */
 export interface AppRepository {
+  hasSession?(): boolean;
   restoreSession?(): Promise<User | null>;
   logout?(): void;
   /** Anonymous load returns the public catalog; authenticated load includes role-visible bookings. */
   load(user?: User): Promise<AppSnapshot>;
+  loadBookingHistory?(user: User, offset: number): Promise<BookingHistoryPage>;
   uploadRoomPhoto(user: User, listing: Listing, file: File): Promise<void>;
   login(input: LoginInput): Promise<User>;
   listUoInstitutions?(): Promise<UoInstitution[]>;
   getCaptcha?(): Promise<CaptchaChallenge>;
   register(input: RegisterInput): Promise<User>;
   updateProfile(user: User, input: ProfileInput): Promise<User>;
+  exportPersonalData?(): Promise<Record<string, unknown>>;
+  requestErasure?(): Promise<{ requested_at: string }>;
   previewAgreements?(user: User, requests: BookingRequest[]): Promise<RentalAgreement[]>;
   bookSlots(user: User, requests: BookingRequest[], agreementTokens: string[]): Promise<Booking[]>;
   createWeeklyReservation?(input: WeeklyReservationInput): Promise<void>;
