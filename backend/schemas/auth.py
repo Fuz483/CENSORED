@@ -16,6 +16,8 @@ class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
     phone: str = Field(..., min_length=7, max_length=32)
     password: str = Field(..., min_length=8, max_length=128)
+    captcha_id: str = Field(..., min_length=32, max_length=32)
+    captcha_answer: str = Field(..., pattern=r"^[0-9]{5}$")
     surname: str | None = Field(default=None, min_length=1, max_length=100)
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     patronymic: str | None = Field(default=None, max_length=100)

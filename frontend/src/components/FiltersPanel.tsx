@@ -4,6 +4,7 @@ import { Search, X } from "lucide-react";
 import { ROOM_TYPE_LIST, ROOM_TYPES } from "../lib/data";
 import type { Filters } from "../lib/types";
 import { useLanguage } from "../lib/i18n";
+import { LocationFields } from "./LocationFields";
 
 interface ControlProps {
   filters: Filters;
@@ -14,6 +15,8 @@ interface ControlProps {
 interface FiltersProps extends ControlProps {
   onReset: () => void;
   schools: string[];
+  cities: readonly string[];
+  districts: readonly string[];
 }
 
 const TIME_RANGES = [
@@ -26,20 +29,24 @@ const TIME_RANGES = [
 export function activeFilterCount(filters: Filters): number {
   return (
     (filters.school ? 1 : 0) +
+    (filters.city ? 1 : 0) +
+    (filters.district ? 1 : 0) +
     (filters.type ? 1 : 0) +
     (filters.from !== 14 || filters.to !== 21 ? 1 : 0)
   );
 }
 
-export function FiltersBar({ filters, onChange, onReset, schools }: FiltersProps) {
+export function FiltersBar({ filters, onChange, onReset, schools, cities, districts }: FiltersProps) {
   const { t } = useLanguage();
   const active = activeFilterCount(filters) > 0;
 
   return (
-    <div className="hidden items-end gap-8 border-y border-ink/15 py-3 lg:flex">
-      <SchoolSelect filters={filters} onChange={onChange} schools={schools} className="w-[220px]" />
-      <TypeSelect filters={filters} onChange={onChange} className="w-[190px]" />
-      <TimeSelect filters={filters} onChange={onChange} className="w-[160px]" />
+    <div className="hidden grid-cols-[1.3fr_repeat(4,minmax(0,1fr))_auto] items-end gap-4 border-y border-ink/15 py-3 lg:grid">
+      <LocationFields prefix="catalog" city={filters.city} district={filters.district} cities={cities} districts={districts}
+        onCityChange={(city) => onChange({ city, district: "" })} onDistrictChange={(district) => onChange({ district })} />
+      <SchoolSelect filters={filters} onChange={onChange} schools={schools} />
+      <TypeSelect filters={filters} onChange={onChange} />
+      <TimeSelect filters={filters} onChange={onChange} />
 
       <button
         type="button"
@@ -89,6 +96,10 @@ export function FiltersSheet({
         </div>
 
         <div className="mt-6 space-y-5">
+          <LocationFields prefix="sheet" city={props.filters.city} district={props.filters.district}
+            cities={props.cities} districts={props.districts}
+            onCityChange={(city) => props.onChange({ city, district: "" })}
+            onDistrictChange={(district) => props.onChange({ district })} />
           <SchoolSelect filters={props.filters} onChange={props.onChange} schools={schools} idPrefix="sheet-" />
           <TypeSelect filters={props.filters} onChange={props.onChange} idPrefix="sheet-" />
           <TimeSelect filters={props.filters} onChange={props.onChange} idPrefix="sheet-" />

@@ -5,7 +5,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from core.security import decode_access_token
+from core.uo_demo import UO_DEMO_USER_ID
 from db.database import get_db
 from db.models import User
 
@@ -28,4 +30,10 @@ async def get_current_user(
 async def get_current_tenant(user: Annotated[User, Depends(get_current_user)]) -> User:
     if user.role != "tenant":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Эта операция доступна арендатору.")
+    return user
+
+
+async def get_current_school(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if user.role != "master" or (user.user_id == UO_DEMO_USER_ID and not settings.UO_DEMO_ENABLED):
+        raise HTTPException(status_code=403, detail="Нет доступа к кабинету УО.")
     return user

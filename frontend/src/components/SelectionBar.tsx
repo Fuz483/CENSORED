@@ -22,7 +22,7 @@ export function SelectionBar({ count, hours, total, disabled = false, onClear, o
             {durationLabel(hours, language)}
           </p>
           <p className="mt-1.5 text-[14px] text-ink-soft">
-            {t("Итого за интервал")} · {money(total)}
+            {t("Тариф за интервал")} · {money(total)} · {t("К оплате 0 BYN")}
           </p>
         </div>
 

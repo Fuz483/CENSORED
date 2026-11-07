@@ -1,10 +1,11 @@
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
+from core.captcha import issue_challenge, verify_challenge
 from core.security import create_access_token, hash_password, verify_password
 from db.database import get_db
 from db.models import User
@@ -23,8 +24,16 @@ def token_response(user: User) -> TokenResponse:
     )
 
 
+@router.get("/captcha")
+async def registration_captcha(response: Response) -> dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+    return issue_challenge()
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    if not verify_challenge(payload.captcha_id, payload.captcha_answer):
+        raise HTTPException(status_code=400, detail="Код с картинки неверен или истёк. Введите новый код.")
     phone = payload.phone.strip()
     existing = (await db.execute(select(User).where(User.phone == phone))).scalar_one_or_none()
     if existing:

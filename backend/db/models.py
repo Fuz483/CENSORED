@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     Time,
     UniqueConstraint,
 )
@@ -17,9 +18,9 @@ from db.database import Base
 
 
 class User(Base):
-    """Модель пользователя платформы (user_table)."""
+    """Модель пользователя платформы."""
 
-    __tablename__ = "user_table"
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
@@ -42,11 +43,12 @@ class User(Base):
 
 
 class Booking(Base):
-    """Модель почасового слота бронирования помещения (booking_table)."""
+    """Разовый заказ арендатора или еженедельный резерв школы."""
 
-    __tablename__ = "booking_table"
+    __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True)
     school: Mapped[str] = mapped_column(String(255), nullable=False)
     type_room: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     room: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
@@ -58,50 +60,40 @@ class Booking(Base):
     code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     user_id: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("user_table.user_id", ondelete="CASCADE"),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
+    series_label: Mapped[Optional[str]] = mapped_column(String(120))
+    agreement_version: Mapped[Optional[str]] = mapped_column(String(32))
+    agreement_text: Mapped[Optional[str]] = mapped_column(Text)
+    agreement_accepted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User"] = relationship("User", back_populates="bookings")
-
-
-class RoomPhoto(Base):
-    """Persistent photo assigned to a room in the public rental catalog."""
-
-    __tablename__ = "room_photo_table"
-    __table_args__ = (
-        UniqueConstraint("school", "type_room", "room", name="uq_room_photo_location"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    school: Mapped[str] = mapped_column(String(255), nullable=False)
-    type_room: Mapped[str] = mapped_column(String(64), nullable=False)
-    room: Mapped[str] = mapped_column(String(128), nullable=False)
-    image_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False
-    )
 
 
 class RoomListing(Base):
     """A room published in the rental catalog by its owning institution."""
 
-    __tablename__ = "room_listing_table"
+    __tablename__ = "listings"
     __table_args__ = (
         UniqueConstraint("school", "type_room", "room", name="uq_room_listing_location"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    owner_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("user_table.user_id", ondelete="CASCADE"), index=True, nullable=False
+    owner_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("users.user_id", ondelete="SET NULL"), index=True
     )
     school: Mapped[str] = mapped_column(String(255), nullable=False)
     uo: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     type_room: Mapped[str] = mapped_column(String(64), nullable=False)
     room: Mapped[str] = mapped_column(String(128), nullable=False)
-    address: Mapped[str] = mapped_column(String(512), nullable=False)
-    capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    address: Mapped[Optional[str]] = mapped_column(String(512))
+    city: Mapped[Optional[str]] = mapped_column(String(100))
+    city_district: Mapped[Optional[str]] = mapped_column(String(100))
+    capacity: Mapped[Optional[int]] = mapped_column(Integer)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     available_from: Mapped[datetime.time] = mapped_column(Time, nullable=False)
     available_to: Mapped[datetime.time] = mapped_column(Time, nullable=False)
+    image_url: Mapped[Optional[str]] = mapped_column(String(512))
+    image_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)

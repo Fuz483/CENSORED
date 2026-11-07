@@ -21,6 +21,8 @@ export interface Listing {
   school: string;
   uo: string;
   address: string;
+  city?: string;
+  cityDistrict?: string;
   type: RoomType;
   room: string;
   capacity: number | null;
@@ -49,6 +51,17 @@ export interface BookingRequest {
   endTime: string;
 }
 
+export interface RentalAgreement {
+  version: string;
+  text: string;
+  token: string;
+}
+
+export interface WeeklyReservation extends BookingRequest {
+  id: number;
+  label: string;
+}
+
 export interface Booking extends Omit<BookingRequest, "listingId"> {
   id: number;
   listing: Listing;
@@ -56,6 +69,8 @@ export interface Booking extends Omit<BookingRequest, "listingId"> {
   total: number;
   state?: BookingState;
   code?: string | null;
+  agreementText?: string | null;
+  agreementAcceptedAt?: string | null;
   customerId: number | null;
   customerName: string;
   customerPhone: string;
@@ -80,6 +95,8 @@ export interface GuardScanResult {
 
 export interface Filters {
   school: string;
+  city: string;
+  district: string;
   type: RoomType | "";
   date: string;
   from: number;

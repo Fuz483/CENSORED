@@ -462,7 +462,7 @@
 
 .auth-dialog {
   max-height: calc(100dvh - 1rem);
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .auth-dialog-content {

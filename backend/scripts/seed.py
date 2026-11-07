@@ -3,7 +3,7 @@ import datetime
 from decimal import Decimal
 from sqlalchemy import select
 from db.database import AsyncSessionLocal, Base, engine
-from db.models import Booking, User
+from db.models import Booking, RoomListing, User
 
 
 async def seed_database() -> None:
@@ -54,9 +54,16 @@ async def seed_database() -> None:
         await session.flush()
 
         today = datetime.date.today()
-        demo_qr = "QR-DEMO150SMART"
+        listing_id = await session.scalar(select(RoomListing.id).where(
+            RoomListing.school == "ГУО «Средняя школа № 1 г. Минска»",
+            RoomListing.type_room == "sport_hall",
+            RoomListing.room == "Спортзал № 1",
+        ))
+        if listing_id is None:
+            raise RuntimeError("Apply database migrations before seeding demo orders.")
         initial_bookings = [
             Booking(
+                listing_id=listing_id,
                 school="ГУО «Средняя школа № 1 г. Минска»",
                 type_room="sport_hall",
                 room="Спортзал № 1",
@@ -65,10 +72,10 @@ async def seed_database() -> None:
                 end_time=datetime.time(19, 0),
                 price=Decimal("45.00"),
                 state="confirmed",
-                code=demo_qr,
                 user_id="USR-TENANT-001",
             ),
             Booking(
+                listing_id=listing_id,
                 school="ГУО «Средняя школа № 1 г. Минска»",
                 type_room="sport_hall",
                 room="Спортзал № 1",
@@ -77,7 +84,6 @@ async def seed_database() -> None:
                 end_time=datetime.time(20, 0),
                 price=Decimal("45.00"),
                 state="confirmed",
-                code=demo_qr,
                 user_id="USR-TENANT-001",
             ),
         ]

@@ -155,15 +155,11 @@ export function ListingDetailsDialog({
               <h3 className="text-[16px] font-medium">{t("Выберите интервал · ")}{longDate(date, language)}</h3>
             </div>
             <div className="mt-3">
-              <IntervalPicker listing={listing} date={date} slots={availability} selected={selected} onChange={onRangeChange} />
+              <IntervalPicker listing={listing} date={date} slots={availability} selected={selected} onChange={onRangeChange}
+                onConfirm={(start, end) => { onRangeChange(start, end); onClose(); }} />
             </div>
           </div>
 
-          <div className="mt-6 flex justify-end border-t border-line pt-4">
-            <button type="button" onClick={onClose} className="btn btn-quiet h-10 px-5">
-              {t("Готово")}
-            </button>
-          </div>
         </div>
       </section>
     </div>

@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "rea
 import { ImagePlus, LoaderCircle, X } from "lucide-react";
 
 import { DEMO_UO_DISTRICT, ROOM_TYPE_LIST, ROOM_TYPES, UO_LIST } from "../lib/data";
+import { cityFromAddress } from "../lib/belarus";
 import { fileToPhoto } from "../lib/images";
 import { errorMessage } from "../lib/repository";
 import type { Listing, RoomType } from "../lib/types";
 import { useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
 import { AvailabilityWindowPicker } from "./AvailabilityWindowPicker";
+import { LocationFields } from "./LocationFields";
 
 interface AddSpaceDialogProps {
   open: boolean;
@@ -24,6 +26,9 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
   const [uo, setUo] = useState(listing?.uo ?? DEMO_UO_DISTRICT);
   const [room, setRoom] = useState(listing?.room ?? "");
   const [address, setAddress] = useState(listing?.address ?? "");
+  const defaultCity = user?.name === "Лицей БГУ" ? "Минск" : "";
+  const [city, setCity] = useState(listing?.city || cityFromAddress(listing?.address ?? "") || defaultCity);
+  const [cityDistrict, setCityDistrict] = useState(listing?.cityDistrict ?? "");
   const [capacity, setCapacity] = useState(String(listing?.capacity ?? ROOM_TYPES.gym.capacity));
   const [price, setPrice] = useState(String(listing?.price ?? ROOM_TYPES.gym.price));
   const [availableFrom, setAvailableFrom] = useState(listing?.availableFrom ?? "14:00");
@@ -32,6 +37,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
   const [fileName, setFileName] = useState("");
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,6 +46,8 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       setUo(listing?.uo ?? DEMO_UO_DISTRICT);
       setRoom(listing?.room ?? "");
       setAddress(listing?.address ?? "");
+      setCity(listing?.city || cityFromAddress(listing?.address ?? "") || defaultCity);
+      setCityDistrict(listing?.cityDistrict ?? "");
       setCapacity(String(listing?.capacity ?? ROOM_TYPES.gym.capacity));
       setPrice(String(listing?.price ?? ROOM_TYPES.gym.price));
       setAvailableFrom(listing?.availableFrom ?? "14:00");
@@ -48,12 +56,12 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       setFileName("");
       setError(null);
     }
-  }, [listing, open]);
+  }, [defaultCity, listing, open]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !saving) onClose();
     };
     window.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
@@ -62,7 +70,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
     };
-  }, [onClose, open]);
+  }, [onClose, open, saving]);
 
   if (!open || !user) return null;
 
@@ -95,6 +103,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (saving || uploading || !city) return;
     const numericCapacity = Number(capacity);
     const numericPrice = Number(price);
 
@@ -119,11 +128,15 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       return;
     }
 
+    setSaving(true);
+    setError(null);
     try {
       const input = {
         school: listing?.school ?? user.name,
         uo,
         address,
+        city,
+        cityDistrict,
         type,
         room,
         capacity: Math.round(numericCapacity),
@@ -138,14 +151,15 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       onSaved(saved);
     } catch (caught) {
       setError(t(errorMessage(caught, "Не удалось сохранить пространство. Проверьте поля и попробуйте ещё раз.")));
-      return;
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <div
       className="overlay-in fixed inset-0 z-50 flex items-end justify-center bg-navy/50 sm:items-center sm:p-4"
-      onClick={onClose}
+      onClick={saving ? undefined : onClose}
       role="presentation"
     >
       <div
@@ -164,6 +178,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
           <button
             type="button"
             onClick={onClose}
+            disabled={saving}
             className="grid size-8 shrink-0 place-items-center text-ink-mute transition-colors hover:text-ink"
             aria-label={t("Закрыть")}
           >
@@ -184,6 +199,9 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                 className="field-box bg-paper-2/60 text-ink-soft"
               />
             </div>
+
+            <LocationFields prefix="space" city={city} district={cityDistrict} required
+              onCityChange={(value) => { setCity(value); setCityDistrict(""); }} onDistrictChange={setCityDistrict} />
 
             <div>
               <label htmlFor="space-uo" className="label mb-1.5 block">
@@ -368,13 +386,14 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
             <button
               type="button"
               onClick={onClose}
+              disabled={saving}
               className="btn btn-quiet flex-1"
             >
               {t("Отмена")}
             </button>
             <button
               type="submit"
-              disabled={uploading}
+              disabled={uploading || saving}
               className="btn btn-primary flex-1"
             >
               {t(listing ? "Сохранить изменения" : "Опубликовать")}

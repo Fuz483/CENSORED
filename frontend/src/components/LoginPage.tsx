@@ -3,13 +3,15 @@ import { ArrowUpRight, Eye, EyeOff, ScanLine, X } from "lucide-react";
 
 import { ROOM_TYPES, ROOM_TYPE_LIST, toISODate } from "../lib/data";
 import { money } from "../lib/format";
+import type { CaptchaChallenge } from "../lib/repository";
 import { freeHourCount, useApp } from "../state/AppState";
 import { Logo } from "./Logo";
+import { SchoolDirectory } from "./SchoolDirectory";
 import { WeekAvailability } from "./WeekAvailability";
 import { LanguageToggle, useLanguage } from "../lib/i18n";
 
 export function LoginPage() {
-  const { login, register, slots, listings, loadError } = useApp();
+  const { login, register, getCaptcha, slots, listings, loadError } = useApp();
   const { t } = useLanguage();
   const HERO_SPACES = ROOM_TYPE_LIST.flatMap((type) => {
     const listing = listings.find((item) => item.type === type);
@@ -25,11 +27,34 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [captcha, setCaptcha] = useState<CaptchaChallenge | null>(null);
+  const [captchaAnswer, setCaptchaAnswer] = useState("");
+  const [captchaError, setCaptchaError] = useState(false);
+  const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [heroSpace, setHeroSpace] = useState(0);
   const touchStartX = useRef<number | null>(null);
   const swipedPhoto = useRef<{ x: number; y: number; at: number } | null>(null);
 
   const freeToday = freeHourCount(slots, toISODate(new Date()));
+  const registering = authOpen && authMode === "register" && role === "tenant";
+
+  const refreshCaptcha = () => {
+    setCaptcha(null);
+    setCaptchaAnswer("");
+    setCaptchaError(false);
+    setCaptchaAttempt((attempt) => attempt + 1);
+  };
+
+  useEffect(() => {
+    if (!registering) return;
+    let active = true;
+    getCaptcha().then((challenge) => {
+      if (active) setCaptcha(challenge);
+    }).catch(() => {
+      if (active) setCaptchaError(true);
+    });
+    return () => { active = false; };
+  }, [captchaAttempt, getCaptcha, registering]);
 
   useEffect(() => {
     if (!authOpen) return;
@@ -43,11 +68,18 @@ export function LoginPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (submitting) return;
+    if (registering && (!captcha || captchaAnswer.length !== 5)) return;
     setSubmitting(true);
     try {
-      setError(role === "tenant" && authMode === "register"
-        ? await register({ surname, firstName, patronymic: "", email: "", phone, password })
-        : await login({ role, phone, password }));
+      if (registering && captcha) {
+        const failure = await register({
+          surname, firstName, patronymic: "", email: "", phone, password, captchaId: captcha.id, captchaAnswer,
+        });
+        setError(failure);
+        if (failure) refreshCaptcha();
+      } else {
+        setError(await login({ role, phone, password }));
+      }
     } finally { setSubmitting(false); }
   };
 
@@ -61,7 +93,7 @@ export function LoginPage() {
           <div className="flex shrink-0 items-center gap-2 sm:gap-7">
             <LanguageToggle />
             <button type="button" onClick={() => { setAuthMode("login"); setAuthOpen(true); setError(null); }} className="inline-flex min-h-10 shrink-0 items-center border-b border-orange px-1 text-[12px] font-medium transition-colors hover:text-orange sm:text-[13px]">{t("Войти")}</button>
-            <button type="button" onClick={() => { setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-10 px-3 text-[11px] sm:px-4 sm:text-[12px]">{t("Зарегистрироваться")}</button>
+            <button type="button" onClick={() => { refreshCaptcha(); setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-10 px-3 text-[11px] sm:px-4 sm:text-[12px]">{t("Зарегистрироваться")}</button>
           </div>
         </div>
       </header>
@@ -287,7 +319,7 @@ export function LoginPage() {
             </div>
             <div className="flex flex-wrap gap-2.5">
               <button type="button" onClick={() => { setAuthMode("login"); setAuthOpen(true); setError(null); }} className="btn btn-quiet h-12 px-6">{t("Войти")}</button>
-              <button type="button" onClick={() => { setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-12 px-6">{t("Зарегистрироваться")}</button>
+              <button type="button" onClick={() => { refreshCaptcha(); setAuthMode("register"); setRole("tenant"); setAuthOpen(true); setError(null); }} className="btn btn-primary h-12 px-6">{t("Зарегистрироваться")}</button>
             </div>
           </div>
         </div>
@@ -313,18 +345,35 @@ export function LoginPage() {
                 </>}
                 {role === "tenant" && <div><label htmlFor="phone" className="auth-dialog-label label block">{t("Телефон")}</label><input id="phone" name="phone" type="tel" required inputMode="tel" autoComplete="tel" value={phone} onChange={(event) => { setPhone(event.target.value); setError(null); }} placeholder="+375 (29) 123-45-67" aria-invalid={Boolean(error)} aria-describedby={error ? "login-error" : undefined} className="auth-dialog-field field" /></div>}
                 <div><label htmlFor="password" className="auth-dialog-label label block">{t("Пароль")}</label><div className="relative"><input id="password" name="password" type={showPassword ? "text" : "password"} required autoComplete={authMode === "register" ? "new-password" : "current-password"} minLength={authMode === "register" ? 8 : undefined} value={password} onChange={(event) => { setPassword(event.target.value); setError(null); }} placeholder="••••••••" aria-invalid={Boolean(error)} aria-describedby={error ? "login-error" : undefined} className="auth-dialog-field field pr-12" /><button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-0 bottom-1 grid size-8 place-items-center text-ink-mute transition-colors hover:text-ink" aria-label={t(showPassword ? "Скрыть пароль" : "Показать пароль")}>{showPassword ? <EyeOff className="size-4" strokeWidth={1.8} /> : <Eye className="size-4" strokeWidth={1.8} />}</button></div>{authMode === "register" && role === "tenant" && <p className="mt-1 text-[11px] text-ink-mute">{t("Не менее 8 символов")}</p>}</div>
+                {registering && (
+                  <div>
+                    <label htmlFor="captcha-answer" className="auth-dialog-label label block">{t("Введите пять цифр с картинки")}</label>
+                    <div className="my-2 flex flex-wrap items-center gap-2">
+                      {captcha ? <img src={captcha.image} width={172} height={56} alt={t("Картинка с кодом проверки")} />
+                        : <p role={captchaError ? "alert" : "status"} className="text-[12px] text-ink-soft">{t(captchaError ? "Не удалось загрузить капчу." : "Загружаем капчу…")}</p>}
+                      <button type="button" onClick={refreshCaptcha} disabled={submitting} className="btn btn-quiet">{t("Новая картинка")}</button>
+                    </div>
+                    <input id="captcha-answer" required inputMode="numeric" autoComplete="off" maxLength={5} pattern="[0-9]{5}"
+                      value={captchaAnswer} onChange={(event) => setCaptchaAnswer(event.target.value.replace(/[^0-9]/g, ""))}
+                      className="auth-dialog-field field" />
+                  </div>
+                )}
                 {error && <p id="login-error" role="alert" className="text-[12.5px] leading-relaxed text-orange">{t(error)}</p>}
-                <button type="submit" disabled={submitting} className="btn btn-primary h-11 w-full">{submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}</button>
+                <button type="submit" disabled={submitting || (registering && !captcha)} className="btn btn-primary h-11 w-full">{submitting ? t("Подождите…") : authMode === "register" ? t("Зарегистрироваться") : t("Войти")}</button>
               </form>
               {role === "tenant" && <p className="auth-dialog-footer text-[12px] text-ink-soft">
                 {authMode === "register" ? t("Уже есть аккаунт?") : t("Нет аккаунта?")} {" "}
-                <button type="button" onClick={() => { setAuthMode(authMode === "register" ? "login" : "register"); setError(null); }} className="font-semibold text-ink underline decoration-line-strong underline-offset-2 hover:text-orange">
+                <button type="button" disabled={submitting} onClick={() => { if (authMode === "login") refreshCaptcha(); setAuthMode(authMode === "register" ? "login" : "register"); setError(null); }} className="font-semibold text-ink underline decoration-line-strong underline-offset-2 hover:text-orange">
                   {authMode === "register" ? t("Войти") : t("Зарегистрироваться")}
                 </button>
               </p>}
             </div>
         </section>
       </div>}
+
+      <div className="mx-auto max-w-[1180px] px-5 pb-8 sm:px-8">
+        <SchoolDirectory />
+      </div>
 
       <footer className="mx-auto max-w-[1180px] px-5 py-8 sm:px-8">
         <div className="flex flex-wrap items-center justify-between gap-4">

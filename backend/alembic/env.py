@@ -7,7 +7,7 @@ from alembic import context
 
 from core.config import settings
 from db.database import Base
-from db.models import Booking, RoomListing, RoomPhoto, User  # noqa: F401
+from db.models import Booking, RoomListing, User  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.async_database_url)

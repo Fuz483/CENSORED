@@ -1,9 +1,9 @@
-import datetime
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from api.routers.bookings import minsk_now
 from db.database import get_db
 from db.models import Booking
 from schemas.booking import BookingResponse, BookingState
@@ -50,7 +50,7 @@ async def scan_qr_code(
 
     total_price = sum((slot.price for slot in slots), Decimal("0.00"))
     all_slots_confirmed = all(slot.state in VALID_ACCESS_STATES for slot in slots)
-    booking_is_for_today = all(slot.date == datetime.date.today() for slot in slots)
+    booking_is_for_today = all(slot.date == minsk_now().date() for slot in slots)
 
     if all_slots_confirmed and booking_is_for_today:
         access_granted = True

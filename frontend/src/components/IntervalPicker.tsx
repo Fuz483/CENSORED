@@ -10,12 +10,14 @@ export function IntervalPicker({
   slots,
   selected,
   onChange,
+  onConfirm,
 }: {
   listing: Listing;
   date: string;
   slots: Slot[];
   selected?: BookingRequest;
   onChange: (startTime: string, endTime: string) => void;
+  onConfirm?: (startTime: string, endTime: string) => void;
 }) {
   const { t } = useLanguage();
   const times = useMemo(
@@ -44,8 +46,11 @@ export function IntervalPicker({
       else merged.push({ ...range });
       return merged;
     }, []);
-  const [startTime, setStartTime] = useState(selected?.startTime ?? min);
-  const [endTime, setEndTime] = useState(selected?.endTime ?? nextHour(min));
+  const firstWindow = availableRanges.find(({ start, end }) => end - start >= MIN_BOOKING_MINUTES);
+  const initialStart = firstWindow ? formatTime(minMinutes + firstWindow.start) : min;
+  const initialEnd = nextHour(initialStart);
+  const [startTime, setStartTime] = useState(selected?.startTime ?? initialStart);
+  const [endTime, setEndTime] = useState(selected?.endTime ?? initialEnd);
   const activeHandle = useRef<"start" | "end" | null>(null);
 
   useEffect(() => {
@@ -53,10 +58,10 @@ export function IntervalPicker({
       setStartTime(selected.startTime);
       setEndTime(selected.endTime);
     } else {
-      setStartTime(min);
-      setEndTime(nextHour(min));
+      setStartTime(initialStart);
+      setEndTime(initialEnd);
     }
-  }, [date, min, selected?.startTime, selected?.endTime]);
+  }, [date, initialStart, initialEnd, selected?.startTime, selected?.endTime]);
 
   const startIndex = canFitMinimum
     ? clamp(Math.round(((timeToMinutes(startTime) ?? minMinutes) - minMinutes) / BOOKING_STEP_MINUTES), 0, maxIndex - minDurationSteps)
@@ -187,6 +192,12 @@ export function IntervalPicker({
         </p>
         <p className="font-serif text-[20px] font-semibold tabular-nums">{money(intervalPrice(listing.price, startTime, endTime))}</p>
       </div>
+      {onConfirm && (
+        <div className="mt-6 flex justify-end border-t border-line pt-4">
+          <button type="button" disabled={!valid} onClick={() => onConfirm(startTime, endTime)}
+            className="btn btn-primary h-10 px-5 disabled:opacity-50">{t("Готово")}</button>
+        </div>
+      )}
     </div>
   );
 }

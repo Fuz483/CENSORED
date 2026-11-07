@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 
 import { ROOM_TYPES } from "../lib/data";
 import { durationLabel, intervalHours, intervalLabel, longDate, plural } from "../lib/format";
-import type { Booking, BookingRequest, Listing } from "../lib/types";
+import type { Booking, BookingRequest, Listing, RentalAgreement } from "../lib/types";
 import { PartialBookingError, errorMessage } from "../lib/repository";
 import { useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
@@ -20,15 +20,17 @@ interface Group {
   request: BookingRequest;
 }
 
-type Step = "processing" | "done" | "error";
+type Step = "review" | "processing" | "done";
 
 export function BookingModal({ requests, onClose, onGoToBookings }: BookingModalProps) {
-  const { listings, bookSlots } = useApp();
+  const { listings, previewAgreements, bookSlots } = useApp();
   const { t, language } = useLanguage();
-  const [step, setStep] = useState<Step>("processing");
+  const [step, setStep] = useState<Step>("review");
   const [created, setCreated] = useState<Booking[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const submitted = useRef(false);
+  const [agreements, setAgreements] = useState<RentalAgreement[] | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   const groups = useMemo<Group[]>(() => requests.flatMap((request) => {
     const listing = listings.find((item) => item.id === request.listingId);
@@ -43,10 +45,11 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
   const cover = groups[0]?.listing;
 
   const submit = async () => {
+    if (step !== "review" || !accepted || !agreements?.length) return;
     setStep("processing");
     setError(null);
     try {
-      const bookings = await bookSlots(requests);
+      const bookings = await bookSlots(requests, agreements.map((agreement) => agreement.token));
       setCreated(bookings);
       setStep("done");
     } catch (caught) {
@@ -54,16 +57,23 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
       if (caught instanceof PartialBookingError) {
         setCreated(caught.created);
         setStep("done");
-      } else setStep("error");
+      } else {
+        setAccepted(false);
+        setAgreements(null);
+        setStep("review");
+      }
     }
   };
 
   useEffect(() => {
-    // The ref prevents React Strict Mode's effect replay from submitting twice.
-    if (submitted.current) return;
-    submitted.current = true;
-    void submit();
-  }, []);
+    let active = true;
+    previewAgreements(requests).then((previews) => {
+      if (active) setAgreements(previews);
+    }).catch((caught) => {
+      if (active) setError(errorMessage(caught, "Не удалось загрузить договор аренды."));
+    });
+    return () => { active = false; };
+  }, [attempt, previewAgreements, requests]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -102,7 +112,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
               id="booking-title"
               className="text-[22px] leading-tight tracking-[-0.025em]"
             >
-              {step === "done" ? t("Бронь оформлена") : step === "error" ? t("Не удалось оформить бронь") : t("Оформляем бронь")}
+              {t(step === "done" ? "Бронь оформлена" : step === "processing" ? "Оформляем бронь" : "Договор аренды")}
             </h2>
           </div>
           <button
@@ -134,9 +144,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
 
             {error && <p role="alert" className="mb-3 text-[13px] text-orange">{error}</p>}
             <p className="text-[14px] text-ink-soft">{longDate(date, language)} · {t("Бронь подтверждена")}</p>
-            {created.some((booking) => booking.state === "confirmed" && booking.code) ? (
-              <p className="mt-2 font-serif text-[24px] leading-none font-medium">{t("QR-пропуск готов")}</p>
-            ) : (
+            {!created.some((booking) => booking.state === "confirmed" && booking.code) && (
               <p role="alert" className="mt-2 text-[13px] text-orange">{t("Сервер не вернул QR-код для брони.")}</p>
             )}
             <p className="mt-3 text-[14px] text-ink-soft">
@@ -167,8 +175,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
             )}
 
             {created.filter((booking) => booking.state === "confirmed" && booking.code).map((booking) => (
-              <div key={booking.id} className="mt-4 border-t border-line pt-4">
-                <p className="inline-flex items-center gap-2 text-[13px] font-semibold text-ok"><Check className="size-4" />{t("Пропуск готов")}</p>
+              <div key={booking.id} className="mt-4 rounded-lg border border-line bg-paper/50 px-4 py-5">
                 <PassQr code={booking.code!} />
               </div>
             ))}
@@ -215,7 +222,7 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
             <div className="px-5 py-5 sm:px-6">
               <div className="divide-y divide-line border-b border-line">
                 {groups.map((group, index) => (
-                  <div key={group.listing.id} className="flex gap-4 py-4">
+                  <div key={`${group.listing.id}-${group.request.date}-${group.request.startTime}`} className="flex gap-4 py-4">
                     <div className="photo-frame aspect-square w-[58px] shrink-0 sm:w-[68px]">
                       <img
                         src={group.listing.image}
@@ -256,16 +263,36 @@ export function BookingModal({ requests, onClose, onGoToBookings }: BookingModal
                   <span className="size-4 animate-spin rounded-full border-2 border-ink/20 border-t-ink" />
                   {t("Отправляем запрос на бронирование…")}
                 </div>
+              ) : agreements ? (
+                <>
+                  <div className="mt-4 space-y-3">
+                    {agreements.map((agreement, index) => (
+                      <div key={agreement.token} className="border border-line bg-paper/45 p-3">
+                        {agreements.length > 1 && <p className="label mb-2">{t("Договор аренды")} {index + 1}</p>}
+                        <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink-soft">{agreement.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <label className="mt-4 flex items-start gap-3 text-[14px] font-medium">
+                    <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)}
+                      className="mt-1 size-4 shrink-0 accent-orange" />
+                    <span>{t(agreements.length === 1 ? "Я согласен с условиями договора аренды" : "Я согласен с условиями всех договоров аренды")}</span>
+                  </label>
+                  <button type="button" onClick={() => void submit()} disabled={!accepted} className="btn btn-primary mt-4 h-12 w-full">
+                    {t("Подтвердить и получить QR")}
+                  </button>
+                </>
+              ) : error ? (
+                <button type="button" onClick={() => { setError(null); setAttempt((value) => value + 1); }}
+                  className="btn btn-quiet mt-4 h-12 w-full">{t("Загрузить договор заново")}</button>
               ) : (
-                <button type="button" onClick={() => void submit()} className="btn btn-primary mt-4 h-12 w-full">
-                  {t("Повторить запрос")}
-                </button>
+                <p role="status" className="mt-4 text-[13px] text-ink-soft">{t("Загружаем договор аренды…")}</p>
               )}
 
               {error && <p role="alert" className="mt-3 text-[12px] text-orange">{error}</p>}
 
               <p className="mt-3 text-center text-[13px] text-ink-soft">
-                {t("Бронь бесплатная — QR-пропуск выдаётся сразу.")}
+                {t("К оплате 0 BYN. Карта не нужна.")}
               </p>
             </div>
           </>

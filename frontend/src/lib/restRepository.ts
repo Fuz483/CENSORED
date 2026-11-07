@@ -1,8 +1,8 @@
-import { nextDays, PEXELS_ROOM_IMAGES, toISODate } from "./data";
+import { PEXELS_ROOM_IMAGES, toISODate } from "./data";
+import { canonicalCity, canonicalDistrict, cityFromAddress } from "./belarus";
 import { intervalHours } from "./format";
-import { isRangeAvailable } from "./intervals";
-import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type LoginInput, type NewListingInput, type RegisterInput } from "./repository";
-import type { Booking, BookingRequest, BookingState, GuardScanResult, Listing, RoomType, Slot, User } from "./types";
+import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type CaptchaChallenge, type LoginInput, type NewListingInput, type RegisterInput } from "./repository";
+import type { Booking, BookingRequest, BookingState, GuardScanResult, Listing, RentalAgreement, RoomType, Slot, User, WeeklyReservation } from "./types";
 
 type ApiRoomType = "sport_hall" | "assembly_hall" | "it_lab" | "workshop" | "pool";
 const roomTypes: Record<RoomType, ApiRoomType> = {
@@ -12,6 +12,7 @@ const uiTypes: Record<ApiRoomType, RoomType> = {
   sport_hall: "gym", assembly_hall: "hall", it_lab: "it", workshop: "classroom", pool: "pool",
 };
 interface ApiRoom {
+  id: number;
   school: string;
   type_room: ApiRoomType;
   room: string;
@@ -19,6 +20,8 @@ interface ApiRoom {
   price: string | number;
   capacity: number | null;
   address: string | null;
+  city?: string | null;
+  city_district?: string | null;
   uo?: string | null;
   owner_id?: string | null;
   available_from?: string;
@@ -27,13 +30,15 @@ interface ApiRoom {
   available_slots: { start_time: string; end_time: string; price: string | number }[];
 }
 interface ApiRoomListing {
-  id?: number;
+  id: number;
   school: string;
   type_room: ApiRoomType;
   room: string;
   uo?: string | null;
   owner_id?: string | null;
   address?: string | null;
+  city?: string | null;
+  city_district?: string | null;
   capacity?: number | null;
   price?: string | number;
   available_from?: string;
@@ -42,6 +47,7 @@ interface ApiRoomListing {
 }
 interface ApiBooking {
   id: number;
+  listing_id: number;
   school: string;
   type_room: ApiRoomType;
   room: string;
@@ -55,6 +61,11 @@ interface ApiBooking {
   customer_name?: string;
   customer_phone?: string;
   customer_id?: number;
+  agreement_text?: string | null;
+  agreement_accepted_at?: string | null;
+}
+interface ApiWeeklyReservation extends ApiBooking {
+  series_label: string;
 }
 interface ApiQrScanResult {
   access_granted: boolean;
@@ -103,11 +114,13 @@ async function fetchWithTransientProxyRetry(input: RequestInfo | URL, init: Requ
   const delays = retrySafe ? [250, 600, 1200] : [];
 
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(input, init);
-    if (!retrySafe || !retryableProxyStatuses.has(response.status) || attempt >= delays.length) {
-      return response;
+    try {
+      const response = await fetch(input, init);
+      if (!retryableProxyStatuses.has(response.status) || attempt >= delays.length) return response;
+      await response.body?.cancel();
+    } catch (error) {
+      if (attempt >= delays.length || init.signal?.aborted) throw error;
     }
-    await response.body?.cancel();
     await new Promise((resolve) => window.setTimeout(resolve, delays[attempt]));
   }
 }
@@ -190,17 +203,25 @@ export class RestRepository implements AppRepository {
       name: [input.firstName, input.patronymic, input.surname].map((part) => part.trim()).filter(Boolean).join(" ") || "Пользователь",
       surname: input.surname.trim() || null, first_name: input.firstName.trim() || null, patronymic: input.patronymic.trim() || null,
       email: input.email.trim() || null, phone: input.phone.trim(), password: input.password,
+      captcha_id: input.captchaId, captcha_answer: input.captchaAnswer,
     });
+  }
+
+  getCaptcha(): Promise<CaptchaChallenge> {
+    return this.request("/auth/captcha");
   }
 
   private listing(room: ApiRoomListing, details?: ApiRoomListing): Listing {
     const key = JSON.stringify([room.school, room.type_room, room.room]);
     const existing = this.listings.get(key);
+    const address = details?.address ?? existing?.address ?? "Адрес уточняется";
+    const city = details?.city ? canonicalCity(details.city) || details.city : existing?.city || cityFromAddress(address);
+    const district = details?.city_district ?? existing?.cityDistrict ?? "";
     const listing: Listing = {
-      id: existing?.id ?? this.listings.size + 1,
+      id: room.id,
       school: room.school, room: room.room, type: uiTypes[room.type_room],
       uo: details?.uo ?? existing?.uo ?? "",
-      address: details?.address ?? existing?.address ?? "Адрес уточняется",
+      address, city, cityDistrict: canonicalDistrict(city, district) || district,
       capacity: details?.capacity ?? existing?.capacity ?? null,
       price: details ? Number(details.price) : existing?.price ?? 0,
       availableFrom: details?.available_from?.slice(0, 5) ?? existing?.availableFrom ?? "14:00",
@@ -213,12 +234,13 @@ export class RestRepository implements AppRepository {
   }
 
   private booking(item: ApiBooking, user: User): Booking {
-    const listing = this.listing(item);
+    const listing = this.listing({ ...item, id: item.listing_id });
     const startTime = item.start_time.slice(0, 5);
     const endTime = item.end_time.slice(0, 5);
     return {
       id: item.id, listing, date: item.date, startTime, endTime,
       total: Number(item.price), state: item.state, code: item.code,
+      agreementText: item.agreement_text, agreementAcceptedAt: item.agreement_accepted_at,
       customerId: item.customer_id ?? user.id, customerName: item.customer_name ?? user.name, customerPhone: item.customer_phone ?? user.phone, source: "client",
       slots: [{ id: item.id, listingId: listing.id, date: item.date, startTime, endTime,
         price: Number(item.price), state: 1, userId: user.id }],
@@ -226,13 +248,14 @@ export class RestRepository implements AppRepository {
   }
 
   async load(user?: User): Promise<AppSnapshot> {
-    const pages = await Promise.all(nextDays().flatMap((day) => Object.values(roomTypes).map((type) => {
-      const query = new URLSearchParams({ date: toISODate(day), type_room: type });
-      return this.request<ApiRoom[]>(`/rooms/available?${query}`);
-    })));
+    const [rooms, history, weekly] = await Promise.all([
+      this.request<ApiRoom[]>(`/rooms/catalog?start=${toISODate(new Date())}`),
+      user ? this.request<ApiBooking[]>(user.role === "master" ? "/uo/bookings" : `/bookings/user/${encodeURIComponent(user.user_id)}`, "GET", undefined, true) : [],
+      user?.role === "master" ? this.request<ApiWeeklyReservation[]>("/uo/weekly-reservations", "GET", undefined, true) : [],
+    ]);
     const slots: Slot[] = [];
     const currentListings = new Map<number, Listing>();
-    for (const room of pages.flat()) {
+    for (const room of rooms) {
       const listing = this.listing(room, room);
       currentListings.set(listing.id, listing);
       for (const slot of room.available_slots) {
@@ -244,8 +267,14 @@ export class RestRepository implements AppRepository {
         });
       }
     }
-    const history = user ? await this.request<ApiBooking[]>(user.role === "master" ? "/uo/bookings" : `/bookings/user/${encodeURIComponent(user.user_id)}`, "GET", undefined, true) : [];
-    return { listings: [...currentListings.values()], slots, bookings: user ? history.map((item) => this.booking(item, user)) : [] };
+    return {
+      listings: [...currentListings.values()], slots,
+      bookings: user ? history.map((item) => this.booking(item, user)) : [],
+      weeklyReservations: weekly.map((item) => ({
+        id: item.id, listingId: item.listing_id, label: item.series_label, date: item.date,
+        startTime: item.start_time.slice(0, 5), endTime: item.end_time.slice(0, 5),
+      })),
+    };
   }
 
   async uploadRoomPhoto(user: User, listing: Listing, file: File): Promise<void> {
@@ -277,16 +306,26 @@ export class RestRepository implements AppRepository {
     if (typeof data?.image_url !== "string") throw new RepositoryError("Сервер вернул некорректный ответ.");
   }
 
-  async bookSlots(user: User, requests: BookingRequest[]): Promise<Booking[]> {
-    if (!requests.length) throw new RepositoryError("Выберите интервал для бронирования.");
-    const snapshot = await this.load(user);
-    const payloads = requests.map((request) => {
-      const listing = snapshot.listings.find((item) => item.id === request.listingId);
-      if (!listing || !isRangeAvailable(snapshot.slots, listing.id, request.date, request.startTime, request.endTime))
-        throw new RepositoryError("Выбранный интервал уже занят или недоступен.");
-      return { school: listing.school, type_room: roomTypes[listing.type], room: listing.room,
-        date: request.date, start_time: request.startTime, hours: intervalHours(request.startTime, request.endTime), user_id: user.user_id };
-    });
+  private bookingPayload(user: User, request: BookingRequest) {
+    const listing = [...this.listings.values()].find((item) => item.id === request.listingId);
+    if (!listing) throw new RepositoryError("Помещение не найдено.");
+    return { school: listing.school, type_room: roomTypes[listing.type], room: listing.room,
+      date: request.date, start_time: request.startTime, hours: intervalHours(request.startTime, request.endTime), user_id: user.user_id };
+  }
+
+  async previewAgreements(user: User, requests: BookingRequest[]): Promise<RentalAgreement[]> {
+    return Promise.all(requests.map((item) =>
+      this.request<RentalAgreement>("/bookings/agreement", "POST", this.bookingPayload(user, item), true),
+    ));
+  }
+
+  async bookSlots(user: User, requests: BookingRequest[], agreementTokens: string[]): Promise<Booking[]> {
+    if (!requests.length || agreementTokens.length !== requests.length || agreementTokens.some((token) => !token)) {
+      throw new RepositoryError("Откройте договор аренды и подтвердите согласие.");
+    }
+    const payloads = requests.map((item, index) => ({
+      ...this.bookingPayload(user, item), agreement_accepted: true, agreement_token: agreementTokens[index],
+    }));
     const created: Booking[] = [];
     for (const payload of payloads) {
       try {
@@ -298,6 +337,17 @@ export class RestRepository implements AppRepository {
       }
     }
     return created;
+  }
+
+  async createWeeklyReservation(input: Omit<WeeklyReservation, "id">): Promise<void> {
+    await this.request("/uo/weekly-reservations", "POST", {
+      listing_id: input.listingId, label: input.label, date: input.date, start_time: input.startTime,
+      hours: intervalHours(input.startTime, input.endTime),
+    }, true);
+  }
+
+  async cancelWeeklyReservation(id: number): Promise<void> {
+    await this.request(`/uo/weekly-reservations/${id}/cancel`, "PATCH", undefined, true);
   }
 
   async scanQr(code: string): Promise<GuardScanResult> {
@@ -346,6 +396,8 @@ export class RestRepository implements AppRepository {
     form.set("type_room", roomTypes[input.type]);
     form.set("room", input.room.trim());
     form.set("address", input.address.trim());
+    if (input.city) form.set("city", input.city);
+    if (input.cityDistrict) form.set("city_district", input.cityDistrict);
     form.set("capacity", String(input.capacity));
     form.set("price", String(input.price));
     form.set("available_from", input.availableFrom);

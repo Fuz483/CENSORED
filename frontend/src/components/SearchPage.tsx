@@ -13,10 +13,13 @@ import { ListingRow } from "./ListingRow";
 import { ListingDetailsDialog } from "./ListingDetailsDialog";
 import { SelectionBar } from "./SelectionBar";
 import { useLanguage } from "../lib/i18n";
+import { BELARUS_CITIES, cityDistricts } from "../lib/belarus";
 
 function defaultFilters(): Filters {
   return {
     school: "",
+    city: "",
+    district: "",
     type: "",
     date: toISODate(new Date()),
     from: 14,
@@ -39,42 +42,48 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
   const from = filters.from;
   const to = filters.to;
 
+  const byLocation = useMemo(() => listings.filter((listing) =>
+    (!filters.city || listing.city === filters.city) && (!filters.district || listing.cityDistrict === filters.district),
+  ), [listings, filters.city, filters.district]);
+  const matching = useMemo(() => {
+    const school = filters.school.trim().toLocaleLowerCase();
+    return byLocation.filter((listing) =>
+      listing.school.toLocaleLowerCase().includes(school) && (!filters.type || listing.type === filters.type),
+    );
+  }, [byLocation, filters.school, filters.type]);
+
   const results = useMemo(() => {
-    return listings
-      .filter(
-        (listing) =>
-          (!filters.school || listing.school.toLocaleLowerCase().includes(filters.school.trim().toLocaleLowerCase())) &&
-          (!filters.type || listing.type === filters.type),
-      )
+    return matching
       .map((listing) => ({
         listing,
         free: freeSlots(slots, listing.id, filters.date, from, to),
       }))
         .filter((row) => row.free.length > 0);
-  }, [listings, slots, filters.school, filters.type, filters.date, from, to]);
+  }, [matching, slots, filters.date, from, to]);
 
   const counts = useMemo(() => {
     const result: Record<string, number> = {};
     for (const date of days) {
-      result[date] = listings
-        .filter(
-          (listing) =>
-            (!filters.school || listing.school.toLocaleLowerCase().includes(filters.school.trim().toLocaleLowerCase())) &&
-            (!filters.type || listing.type === filters.type),
-        )
-        .reduce(
+      result[date] = matching.reduce(
           (sum, listing) =>
             sum + freeSlotHours(freeSlots(slots, listing.id, date, from, to)),
           0,
         );
     }
     return result;
-  }, [days, listings, slots, filters.school, filters.type, from, to]);
+  }, [days, matching, slots, from, to]);
 
   const catalogSchools = useMemo(
-    () => [...new Set(listings.map((listing) => listing.school))].sort((a, b) => a.localeCompare(b, "ru")),
-    [listings],
+    () => [...new Set(byLocation.map((listing) => listing.school))].sort((a, b) => a.localeCompare(b, "ru")),
+    [byLocation],
   );
+  const cities = useMemo(() => [...new Set([
+    ...BELARUS_CITIES, ...listings.flatMap(({ city }) => city ? [city] : []),
+  ])].sort((a, b) => a.localeCompare(b, "ru")), [listings]);
+  const districts = [...new Set([
+    ...cityDistricts(filters.city),
+    ...listings.flatMap(({ city, cityDistrict }) => city === filters.city && cityDistrict ? [cityDistrict] : []),
+  ])];
 
   const total = selected.reduce((sum, request) => {
     const listing = listings.find((item) => item.id === request.listingId);
@@ -94,6 +103,7 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
 
   const patchFilters = (patch: Partial<Filters>) => {
     setSelected([]);
+    if (patch.city !== undefined) patch = { ...patch, school: "" };
     setFilters((prev) => ({ ...prev, ...patch }));
   };
 
@@ -135,7 +145,8 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
         </div>
 
         <div className="mt-5">
-          <FiltersBar filters={filters} onChange={patchFilters} onReset={resetFilters} schools={catalogSchools} />
+          <FiltersBar filters={filters} onChange={patchFilters} onReset={resetFilters} schools={catalogSchools}
+            cities={cities} districts={districts} />
 
           <div className="lg:hidden">
             <button
@@ -215,6 +226,8 @@ export function SearchPage({ onGoToBookings }: { onGoToBookings: () => void }) {
         onReset={resetFilters}
         resultCount={results.length}
         schools={catalogSchools}
+        cities={cities}
+        districts={districts}
       />
 
       {detailsId !== null && (() => {

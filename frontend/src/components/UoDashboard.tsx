@@ -16,15 +16,16 @@ import type { Booking, BookingSource, Listing } from "../lib/types";
 import { freeSlotHours, useApp } from "../state/AppState";
 import { AddSpaceDialog } from "./AddSpaceDialog";
 import { ManualBookingDialog } from "./ManualBookingDialog";
+import { WeeklyReservations } from "./WeeklyReservations";
 import { useLanguage } from "../lib/i18n";
 
-type Tab = "spaces" | "bookings";
+type Tab = "spaces" | "bookings" | "weekly";
 type BookingFilter = "all" | BookingSource;
 // Creation and photo changes are supported; other management actions remain read-only.
 const READ_ONLY = true;
 
 export function UoDashboard() {
-  const { user, listings, slots, bookings, deleteListing, uploadRoomPhoto, reload } = useApp();
+  const { user, listings, slots, bookings, weeklyReservations, deleteListing, uploadRoomPhoto, reload } = useApp();
   const { t } = useLanguage();
   const [tab, setTab] = useState<Tab>("spaces");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
@@ -155,7 +156,7 @@ export function UoDashboard() {
       </dl>
 
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-b border-ink/20">
-        <div role="tablist" aria-label={t("Кабинет УО")} className="flex gap-6">
+        <div role="tablist" aria-label={t("Кабинет УО")} className="flex flex-wrap gap-x-5">
           <TabButton
             active={tab === "spaces"}
             onClick={() => setTab("spaces")}
@@ -170,6 +171,9 @@ export function UoDashboard() {
           >
             {t("Брони")}
           </TabButton>
+          <TabButton active={tab === "weekly"} onClick={() => setTab("weekly")} count={weeklyReservations.length}>
+            {t("Постоянные клиенты")}
+          </TabButton>
         </div>
 
         <button type="button" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await reload(); } finally { setRefreshing(false); } }} className="btn btn-quiet mb-3 h-11">{t(refreshing ? "Подождите…" : "Обновить данные")}</button>
@@ -182,7 +186,7 @@ export function UoDashboard() {
             <Plus className="size-4" strokeWidth={1.8} />
             {t("Добавить пространство")}
           </button>
-        ) : !READ_ONLY ? (
+        ) : tab === "bookings" && !READ_ONLY ? (
           <button
             type="button"
             onClick={() => setManualOpen(true)}
@@ -213,6 +217,8 @@ export function UoDashboard() {
           onDelete={(listing) => void removeSpace(listing)}
           onChangePhoto={changePhoto}
         />
+      ) : tab === "weekly" ? (
+        <WeeklyReservations listings={ownListings} />
       ) : (
         <BookingsTab
           bookings={visibleBookings}

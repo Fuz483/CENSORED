@@ -10,8 +10,8 @@ import {
 } from "react";
 
 import { RestRepository } from "../lib/restRepository";
-import { PartialBookingError, RepositoryError, errorMessage, type AppRepository, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput } from "../lib/repository";
-import type { Booking, BookingRequest, GuardScanResult, Listing, Slot, User } from "../lib/types";
+import { PartialBookingError, RepositoryError, errorMessage, type AppRepository, type CaptchaChallenge, type LoginInput, type ManualBookingInput, type NewListingInput, type ProfileInput, type RegisterInput } from "../lib/repository";
+import type { Booking, BookingRequest, GuardScanResult, Listing, RentalAgreement, Slot, User, WeeklyReservation } from "../lib/types";
 import { timeToMinutes } from "../lib/intervals";
 
 interface AppContextValue {
@@ -19,14 +19,19 @@ interface AppContextValue {
   listings: Listing[];
   slots: Slot[];
   bookings: Booking[];
+  weeklyReservations: WeeklyReservation[];
   ready: boolean;
   loadError: string | null;
   reload: () => Promise<void>;
   login: (input: LoginInput) => Promise<string | null>;
   register: (input: RegisterInput) => Promise<string | null>;
+  getCaptcha: () => Promise<CaptchaChallenge>;
   updateProfile: (input: ProfileInput) => Promise<string | null>;
   logout: () => void;
-  bookSlots: (requests: BookingRequest[]) => Promise<Booking[]>;
+  previewAgreements: (requests: BookingRequest[]) => Promise<RentalAgreement[]>;
+  bookSlots: (requests: BookingRequest[], tokens: string[]) => Promise<Booking[]>;
+  createWeeklyReservation: (input: Omit<WeeklyReservation, "id">) => Promise<void>;
+  cancelWeeklyReservation: (id: number) => Promise<void>;
   scanQr: (code: string) => Promise<GuardScanResult>;
   cancelBooking: (bookingId: number) => Promise<void>;
   addListing: (input: NewListingInput) => Promise<Listing>;
@@ -50,6 +55,7 @@ export function AppProvider({
   const [listings, setListings] = useState<Listing[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [weeklyReservations, setWeeklyReservations] = useState<WeeklyReservation[]>([]);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -58,6 +64,7 @@ export function AppProvider({
     setListings(snapshot.listings);
     setSlots(snapshot.slots);
     setBookings(snapshot.bookings);
+    setWeeklyReservations(snapshot.weeklyReservations ?? []);
     setLoadError(null);
   }, [repo]);
 
@@ -65,13 +72,15 @@ export function AppProvider({
     let active = true;
     (async () => {
       const initialUser = await repo.restoreSession?.() ?? null;
-      if (active) setUser(initialUser);
+      if (!active) return null;
+      setUser(initialUser);
       return repo.load(initialUser ?? undefined);
     })().then((snapshot) => {
-      if (!active) return;
+      if (!active || !snapshot) return;
       setListings(snapshot.listings);
       setSlots(snapshot.slots);
       setBookings(snapshot.bookings);
+      setWeeklyReservations(snapshot.weeklyReservations ?? []);
       setReady(true);
     }).catch((error) => {
       if (active) {
@@ -118,6 +127,11 @@ export function AppProvider({
     }
   }, [refreshAfterMutation, repo]);
 
+  const getCaptcha = useCallback(async () => {
+    if (!repo.getCaptcha) throw new RepositoryError("Капча недоступна.");
+    return repo.getCaptcha();
+  }, [repo]);
+
   const updateProfile = useCallback(async (input: ProfileInput) => {
     if (!user) return "Войдите, чтобы изменить профиль.";
     try {
@@ -133,12 +147,18 @@ export function AppProvider({
     repo.logout?.();
     setUser(null);
     setBookings([]);
+    setWeeklyReservations([]);
   }, [repo]);
 
-  const bookSlots = useCallback(async (requests: BookingRequest[]) => {
+  const previewAgreements = useCallback(async (requests: BookingRequest[]) => {
+    if (!user || !repo.previewAgreements) throw new RepositoryError("Договор аренды недоступен.");
+    return repo.previewAgreements(user, requests);
+  }, [repo, user]);
+
+  const bookSlots = useCallback(async (requests: BookingRequest[], tokens: string[]) => {
     if (!user) throw new RepositoryError("Войдите, чтобы забронировать часы.");
     try {
-      const created = await repo.bookSlots(user, requests);
+      const created = await repo.bookSlots(user, requests, tokens);
       setBookings((current) => [...created, ...current.filter((item) => !created.some((booking) => booking.id === item.id))]);
       await refreshAfterMutation(user);
       return created;
@@ -147,6 +167,18 @@ export function AppProvider({
       await refreshAfterMutation(user);
       throw error;
     }
+  }, [refreshAfterMutation, repo, user]);
+
+  const createWeeklyReservation = useCallback(async (input: Omit<WeeklyReservation, "id">) => {
+    if (user?.role !== "master" || !repo.createWeeklyReservation) throw new RepositoryError("Нет доступа к еженедельным резервам.");
+    await repo.createWeeklyReservation(input);
+    await refreshAfterMutation(user);
+  }, [refreshAfterMutation, repo, user]);
+
+  const cancelWeeklyReservation = useCallback(async (id: number) => {
+    if (user?.role !== "master" || !repo.cancelWeeklyReservation) throw new RepositoryError("Нет доступа к еженедельным резервам.");
+    await repo.cancelWeeklyReservation(id);
+    await refreshAfterMutation(user);
   }, [refreshAfterMutation, repo, user]);
 
   const scanQr = useCallback((code: string) => repo.scanQr(code), [repo]);
@@ -161,9 +193,9 @@ export function AppProvider({
   const addListing = useCallback(async (input: NewListingInput) => {
     if (!user) throw new RepositoryError("Войдите, чтобы добавить пространство.");
     const listing = await repo.addListing(user, input);
-    await refresh(user);
+    await refreshAfterMutation(user);
     return listing;
-  }, [refresh, repo, user]);
+  }, [refreshAfterMutation, repo, user]);
 
   const updateListing = useCallback(async (listingId: number, input: NewListingInput) => {
     if (!user) throw new RepositoryError("Войдите, чтобы изменить пространство.");
@@ -181,8 +213,8 @@ export function AppProvider({
   const uploadRoomPhoto = useCallback(async (listing: Listing, file: File) => {
     if (!user) throw new RepositoryError("Войдите, чтобы изменить фото.");
     await repo.uploadRoomPhoto(user, listing, file);
-    await refresh(user);
-  }, [refresh, repo, user]);
+    await refreshAfterMutation(user);
+  }, [refreshAfterMutation, repo, user]);
 
   const createManualBooking = useCallback(async (input: ManualBookingInput) => {
     if (!user) throw new RepositoryError("Войдите, чтобы создать бронь.");
@@ -192,8 +224,8 @@ export function AppProvider({
   }, [refresh, repo, user]);
 
   const value = useMemo(() => ({
-    user, listings, slots, bookings, ready, loadError, reload, login, register, updateProfile, logout, bookSlots, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking,
-  }), [user, listings, slots, bookings, ready, loadError, reload, login, register, updateProfile, logout, bookSlots, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking]);
+    user, listings, slots, bookings, weeklyReservations, ready, loadError, reload, login, register, getCaptcha, updateProfile, logout, previewAgreements, bookSlots, createWeeklyReservation, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking,
+  }), [user, listings, slots, bookings, weeklyReservations, ready, loadError, reload, login, register, getCaptcha, updateProfile, logout, previewAgreements, bookSlots, createWeeklyReservation, cancelWeeklyReservation, scanQr, cancelBooking, addListing, updateListing, deleteListing, uploadRoomPhoto, createManualBooking]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

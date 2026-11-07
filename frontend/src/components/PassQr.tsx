@@ -1,49 +1,54 @@
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import QRCode from "qrcode";
+import { useLanguage } from "../lib/i18n";
 
 export function PassQr({
   code,
-  label = "QR-пропуск",
   large = false,
   showCode = true,
 }: {
   code: string;
-  label?: string;
   large?: boolean;
   showCode?: boolean;
 }) {
-  const [dataUrl, setDataUrl] = useState<string | null>(null);
-  const size = large ? 512 : 240;
+  const { t } = useLanguage();
+  const [result, setResult] = useState<{ code: string; url: string | null }>();
+  const qr = result?.code === code ? result : undefined;
 
   useEffect(() => {
     let active = true;
     void QRCode.toDataURL(code, {
       errorCorrectionLevel: "M",
-      margin: 2,
-      width: size,
+      margin: 4,
+      width: 512,
       color: { dark: "#102a3f", light: "#ffffff" },
     }).then((url) => {
-      if (active) setDataUrl(url);
+      if (active) setResult({ code, url });
     }).catch(() => {
-      if (active) setDataUrl(null);
+      if (active) setResult({ code, url: null });
     });
     return () => { active = false; };
-  }, [code, size]);
+  }, [code]);
 
   return (
-    <div className={large ? "flex flex-col items-center" : "inline-flex items-center gap-3 border border-line bg-white p-2.5"}>
-      {dataUrl ? (
-        <img src={dataUrl} alt={label} className={large ? "size-64 max-w-full object-contain sm:size-80" : "size-24"} />
+    <div className="flex min-w-0 flex-col items-center gap-3 text-center">
+      {qr?.url ? (
+        <p className="inline-flex items-center gap-1.5 rounded-full bg-ok/10 px-3 py-1.5 text-[13px] font-semibold text-ok">
+          <Check className="size-4 shrink-0" aria-hidden="true" />
+          {t("Пропуск готов")}
+        </p>
       ) : (
-        <span className={`grid place-items-center bg-paper text-[11px] text-ink-mute ${large ? "size-64 max-w-full sm:size-80" : "size-24"}`}>
-          Создаём QR…
-        </span>
+        <p role="status" className="text-[13px] text-ink-soft">
+          {t(qr ? "Не удалось отобразить QR. Покажите код ниже." : "Создаём QR…")}
+        </p>
       )}
-      {!large && showCode && (
-        <div className="max-w-[17ch]">
-          <p className="text-[12px] font-semibold">{label}</p>
-          <p className="mt-1 break-all font-mono text-[10px] leading-relaxed text-ink-mute">{code}</p>
-        </div>
+      {qr?.url && (
+        <img src={qr.url} alt={t("QR-пропуск")} width={512} height={512}
+          className={`aspect-square h-auto max-w-full rounded-md border border-line bg-white ${large ? "w-64 sm:w-72" : "w-40"}`} />
+      )}
+      {(showCode || (qr && !qr.url)) && (
+        <p className="max-w-full break-all font-mono text-[11px] leading-relaxed text-ink-mute">{code}</p>
       )}
     </div>
   );

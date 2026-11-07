@@ -1,4 +1,9 @@
-import type { Booking, BookingRequest, GuardScanResult, Listing, Slot, User } from "./types";
+import type { Booking, BookingRequest, GuardScanResult, Listing, RentalAgreement, Slot, User, WeeklyReservation } from "./types";
+
+export interface CaptchaChallenge {
+  id: string;
+  image: string;
+}
 
 export interface LoginInput {
   role: User["role"];
@@ -13,6 +18,8 @@ export interface RegisterInput {
   phone: string;
   email: string;
   password: string;
+  captchaId: string;
+  captchaAnswer: string;
 }
 
 export type ProfileInput = Pick<RegisterInput, "surname" | "firstName" | "patronymic" | "phone" | "email">;
@@ -21,6 +28,8 @@ export interface NewListingInput {
   school: string;
   uo: string;
   address: string;
+  city?: string;
+  cityDistrict?: string;
   type: Listing["type"];
   room: string;
   capacity: number;
@@ -44,6 +53,7 @@ export interface AppSnapshot {
   listings: Listing[];
   slots: Slot[];
   bookings: Booking[];
+  weeklyReservations?: WeeklyReservation[];
 }
 
 /**
@@ -57,9 +67,13 @@ export interface AppRepository {
   load(user?: User): Promise<AppSnapshot>;
   uploadRoomPhoto(user: User, listing: Listing, file: File): Promise<void>;
   login(input: LoginInput): Promise<User>;
+  getCaptcha?(): Promise<CaptchaChallenge>;
   register(input: RegisterInput): Promise<User>;
   updateProfile(user: User, input: ProfileInput): Promise<User>;
-  bookSlots(user: User, requests: BookingRequest[]): Promise<Booking[]>;
+  previewAgreements?(user: User, requests: BookingRequest[]): Promise<RentalAgreement[]>;
+  bookSlots(user: User, requests: BookingRequest[], agreementTokens: string[]): Promise<Booking[]>;
+  createWeeklyReservation?(input: Omit<WeeklyReservation, "id">): Promise<void>;
+  cancelWeeklyReservation?(id: number): Promise<void>;
   scanQr(code: string): Promise<GuardScanResult>;
   cancelBooking(user: User, bookingId: number): Promise<void>;
   addListing(user: User, input: NewListingInput): Promise<Listing>;

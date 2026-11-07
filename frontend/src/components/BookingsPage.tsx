@@ -192,8 +192,17 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
                     {booking.listing.address} · {t(ROOM_TYPES[booking.listing.type].label)} ·{" "}
                     {intervalLabel(booking.startTime, booking.endTime)}
                   </p>
+                  {booking.agreementText && (
+                    <details className="mt-3 text-[13px] text-ink-soft">
+                      <summary className="cursor-pointer font-medium text-blue">{t("Договор аренды")}</summary>
+                      <p className="mt-2 whitespace-pre-wrap break-words">{booking.agreementText}</p>
+                      {booking.agreementAcceptedAt && (
+                        <p className="mt-2 text-[12px]">{t("Согласие подтверждено")} · {new Date(booking.agreementAcceptedAt).toLocaleString(language, { timeZone: "Europe/Minsk" })}</p>
+                      )}
+                    </details>
+                  )}
                   {booking.state !== "cancelled" && booking.code ? (
-                    <div className="mt-3">
+                    <div className="mt-3 flex flex-col items-start gap-2">
                       {booking.state === "confirmed" && (
                         <p className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-ok">
                           <Check className="size-3.5" />{t("Пропуск готов")}
@@ -209,7 +218,7 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
                           startTime: booking.startTime,
                           endTime: booking.endTime,
                         })}
-                        className="btn btn-quiet mt-2 flex h-10 items-center gap-2 px-3 text-[12px]"
+                        className="btn btn-quiet flex h-10 items-center gap-2 px-3 text-[12px]"
                       >
                         <QrCode className="size-4" aria-hidden="true" />
                         {t("Показать QR-код")}
@@ -317,7 +326,7 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
             role="dialog"
             aria-modal="true"
             aria-labelledby="pass-qr-title"
-            className="sheet-in relative w-full max-w-[520px] border border-line bg-surface px-5 pb-6 pt-5 shadow-[0_24px_80px_rgba(13,36,55,0.24)] sm:px-8 sm:pb-8 sm:pt-7"
+            className="sheet-in relative max-h-[calc(100dvh-2rem)] w-full max-w-[520px] overflow-y-auto border border-line bg-surface px-5 pb-6 pt-5 shadow-[0_24px_80px_rgba(13,36,55,0.24)] sm:px-8 sm:pb-8 sm:pt-7"
             onClick={(event) => event.stopPropagation()}
           >
             <button
@@ -337,7 +346,7 @@ export function BookingsPage({ onSearch }: { onSearch: () => void }) {
                 {t(selectedQr.room)} · {longDate(selectedQr.date, language)} · {intervalLabel(selectedQr.startTime, selectedQr.endTime)}
               </p>
             </div>
-            <div className="mt-6 flex justify-center border-y border-line bg-white py-5 sm:py-6">
+            <div className="mt-5 rounded-lg border border-line bg-paper/50 p-4 sm:p-5">
               <PassQr code={selectedQr.code} large showCode={false} />
             </div>
             <p className="mt-4 text-center text-[13px] text-ink-soft">{t("Покажите код при входе в помещение.")}</p>
