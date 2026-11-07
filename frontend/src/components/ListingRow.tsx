@@ -1,88 +1,66 @@
 import { ROOM_TYPES } from "../lib/data";
 import { intervalLabel, money } from "../lib/format";
 import type { BookingRequest, Listing } from "../lib/types";
-import { ArrowUpRight, MapPin } from "lucide-react";
+import { ArrowRight, Clock3 } from "lucide-react";
 import { useLanguage } from "../lib/i18n";
 
-interface ListingRowProps {
-  listing: Listing;
-  selected?: BookingRequest;
-  onOpenDetails: () => void;
-  index: number;
-}
+type ListingRowProps = { listing: Listing } & (
+  | { href: string; selected?: never; onOpenDetails?: never }
+  | { href?: never; selected?: BookingRequest; onOpenDetails: () => void }
+);
 
-export function ListingRow({
-  listing,
-  selected,
-  onOpenDetails,
-  index,
-}: ListingRowProps) {
+export function ListingRow({ listing, selected, onOpenDetails, href }: ListingRowProps) {
   const { t } = useLanguage();
   const meta = ROOM_TYPES[listing.type];
+  const Title = href ? "h3" : "h2";
+  const room = t(listing.room);
+  const school = t(listing.school);
+  const action = t(href ? "Войти и выбрать" : "Выбрать время");
+  const actionName = `${action}: ${room}, ${school}`;
+  const actionClassName = "btn btn-primary min-h-11 w-full cursor-pointer rounded-lg px-3.5 text-[15px] before:absolute before:inset-0 before:rounded-xl sm:w-auto";
+  const actionContent = <>{action} <ArrowRight className="size-4 shrink-0" aria-hidden="true" /></>;
+  const capacity = listing.capacity === null ? t("Вместимость не указана") : `${t("До ")}${listing.capacity}${t(" человек")}`;
 
   return (
     <article
-      role="button"
-      tabIndex={0}
-      onClick={onOpenDetails}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpenDetails();
-        }
-      }}
-      className="photo-link group grid cursor-pointer grid-cols-[84px_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-4 border-b border-line py-5 transition-colors hover:bg-surface/50 focus-visible:outline-orange sm:grid-cols-[126px_minmax(0,1fr)_auto] sm:gap-x-5 lg:grid-cols-[150px_minmax(0,1fr)_minmax(180px,auto)_118px] lg:items-center lg:gap-8 lg:py-6"
-      aria-label={`${t("Подробнее")}: ${t(listing.room)}, ${t(listing.school)}`}
+      className={`space-card photo-link relative flex flex-wrap items-center gap-x-3 gap-y-3.5 p-4 transition-colors hover:border-line-strong focus-within:border-blue sm:p-5 lg:grid lg:grid-cols-[10rem_minmax(0,1fr)_auto] lg:grid-rows-2 lg:gap-x-5 lg:gap-y-2 ${selected ? "border-orange/55" : ""}`}
     >
-      <div
-        className="photo-frame aspect-[4/3] w-full"
-      >
-        <img
-          src={listing.image}
-          alt={`${t(meta.label)} «${t(listing.room)}» в ${t(listing.school)}`}
-          loading="lazy"
-          decoding="async"
-        />
-        <span className="index-tag">
-          {String(index).padStart(2, "0")}
-        </span>
+      <div className="flex min-w-0 flex-col justify-center gap-1 rounded-lg bg-sky-soft/65 px-3 py-2.5 text-blue-deep lg:row-span-2 lg:self-stretch lg:px-3.5">
+        <p className="font-serif text-[18px] leading-tight font-semibold wrap-break-word tabular-nums sm:text-[20px]">
+          {money(listing.price)}
+        </p>
+        <p className="text-sm text-ink-soft">{t("за час")}</p>
       </div>
 
-      <div className="min-w-0 self-center">
-        <div className="group/detail block max-w-full text-left">
-          <h2 className="truncate text-[20px] leading-tight tracking-[-0.025em] group-hover/detail:text-blue sm:text-[23px]">
-            {t(listing.room)}
-          </h2>
-          <p className="mt-1.5 flex items-start gap-1.5 text-[12.5px] leading-snug text-ink-soft">
-            <MapPin className="mt-0.5 size-3.5 shrink-0 text-orange" strokeWidth={1.8} />
-            <span>{listing.address}</span>
+      {selected && (
+        <p className="ml-auto inline-flex items-center gap-1.5 font-mono text-sm font-medium text-blue-deep lg:col-start-3 lg:row-start-1 lg:self-end">
+          <Clock3 className="size-4 shrink-0" aria-hidden="true" />
+          {intervalLabel(selected.startTime, selected.endTime)}
+        </p>
+      )}
+
+      <div className="flex min-w-0 basis-full items-start gap-3 sm:gap-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:items-center">
+        <div className="photo-frame space-card-photo">
+          <img src={listing.image} alt="" loading="lazy" decoding="async" />
+        </div>
+        <div className="min-w-0">
+          <Title className="space-card-title">{room}</Title>
+          <p className="mt-1.5 text-[16px] leading-snug wrap-break-word text-ink-soft">{school}</p>
+          <p className="mt-1 text-sm leading-relaxed wrap-break-word text-ink-mute">{t(listing.address)}</p>
+          <p className="mt-1 text-sm leading-snug wrap-break-word text-ink-mute">
+            {t(meta.label)} · {capacity}
           </p>
-          <p className="mt-1.5 text-[12px] leading-snug text-ink-mute">
-            {t(meta.label)} · {listing.capacity === null ? t("Вместимость не указана") : `${t("До ")}${listing.capacity}${t(" человек")}`} · {t(listing.school)}
-          </p>
-          <span className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-blue">
-            {t("Подробнее")} <ArrowUpRight className="size-3.5" strokeWidth={1.8} />
-          </span>
         </div>
       </div>
 
-      <div className="shrink-0 text-right lg:col-start-4 lg:row-start-1">
-        <p className="font-serif text-[17px] leading-none font-medium tabular-nums sm:text-[18px]">
-          {money(listing.price)}
-        </p>
-        <p className="mt-1 text-[12.5px] text-ink-mute">
-          {t("за час")}
-        </p>
-        {selected && (
-          <p className="mt-2 whitespace-nowrap text-[12px] font-medium text-orange">
-            {intervalLabel(selected.startTime, selected.endTime)}
-          </p>
+      <div className={`flex basis-full lg:col-start-3 ${selected ? "lg:row-start-2 lg:self-start" : "lg:row-span-2 lg:row-start-1"}`}>
+        {href ? (
+          <a href={href} aria-label={actionName} className={actionClassName}>{actionContent}</a>
+        ) : (
+          <button type="button" onClick={onOpenDetails} aria-haspopup="dialog" aria-label={actionName} className={actionClassName}>
+            {actionContent}
+          </button>
         )}
-      </div>
-
-      <div className="col-span-3 flex items-center gap-2 text-[12px] text-blue lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:justify-self-end">
-        <span>{t("Посмотреть и выбрать время")}</span>
-        <ArrowUpRight className="size-3.5 shrink-0" strokeWidth={1.8} />
       </div>
     </article>
   );

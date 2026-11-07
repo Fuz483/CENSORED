@@ -1,5 +1,5 @@
-import { HOURS, nextDays, toISODate } from "../lib/data";
-import { dayNumber, monthShort, weekdayShort } from "../lib/format";
+import { nextDays, toISODate } from "../lib/data";
+import { longDate, weekdayShort } from "../lib/format";
 import { freeSlotHours, useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
 
@@ -11,7 +11,6 @@ export function WeekAvailability({ className = "" }: { className?: string }) {
   const { slots, listings, loadError } = useApp();
   const { t, language } = useLanguage();
   const days = nextDays(7).map(toISODate);
-  const capacity = Math.max(1, listings.length * HOURS.length);
 
   const rows = days.map((date) => ({
     date,
@@ -19,82 +18,56 @@ export function WeekAvailability({ className = "" }: { className?: string }) {
   }));
 
   const total = rows.reduce((sum, row) => sum + row.count, 0);
-  const axisTicks = [capacity, capacity * 0.75, capacity * 0.5, capacity * 0.25, 0];
+  const peak = Math.max(...rows.map(({ count }) => count));
+  const targetStep = Math.max(1, peak / 4);
+  const magnitude = 10 ** Math.floor(Math.log10(targetStep));
+  const step = Math.ceil(([1, 2, 2.5, 5, 10].find((size) => size * magnitude >= targetStep) ?? 10) * magnitude);
+  const scaleMax = step * 4;
+  const axisTicks = [4, 3, 2, 1, 0].map((level) => level * step);
 
-  if (loadError && !listings.length) return <p role="status" className="border-t border-paper/25 py-6 text-paper/75">{t("Нет данных")}</p>;
+  if (loadError && !listings.length) return <p role="status" className="border-t border-on-navy/25 py-6 text-on-navy/75">{t("Нет данных")}</p>;
 
   return (
     <div className={`min-w-0 ${className}`}>
-      <div className="flex items-end justify-between gap-4 pb-4 sm:pb-5">
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3 pb-4 sm:pb-5">
         <div>
-          <p className="font-mono text-[9px] font-medium tracking-[0.16em] text-paper/55 uppercase sm:text-[10px]">{t("Свободные часы на неделе")}</p>
+          <p className="text-sm font-medium text-on-navy/80">{t("Свободные часы на неделе")}</p>
           <p className="mt-2 font-serif text-[38px] leading-none font-bold tracking-[-0.045em] tabular-nums sm:text-[46px]">
             {total}
-            <span className="ml-2 font-sans text-[12px] font-normal tracking-normal text-paper/60 sm:text-[13px]">
+            <span className="ml-2 font-sans text-base font-normal tracking-normal text-on-navy/75">
               {t("часов")}
             </span>
           </p>
         </div>
-        <div className="mb-0.5 flex flex-col items-end gap-2.5 text-right">
-          <span className="inline-flex items-center gap-2 border border-paper/15 bg-paper/[0.06] px-2.5 py-1.5 text-[10px] font-medium text-paper/80 sm:text-[11px]">
-            <span className="size-1.5 rounded-full bg-[#75c9c0] shadow-[0_0_9px_rgba(117,201,192,0.65)]" aria-hidden="true" />
-            {listings.length} {t("пространств")}
-          </span>
-          <p className="font-mono text-[9px] tracking-[0.08em] text-paper/50 sm:text-[10px]">14:00–21:00</p>
-        </div>
+        <span className="mb-0.5 inline-flex items-center gap-2 rounded-lg border border-on-navy/15 bg-on-navy/[0.06] px-2.5 py-1.5 text-sm font-medium text-on-navy/85">
+          <span className="size-1.5 rounded-full bg-chart-series" aria-hidden="true" />
+          {listings.length} {t("пространств")}
+        </span>
       </div>
 
-      <div className="border border-paper/15 bg-paper/[0.035] px-2 pt-3 sm:px-4 sm:pt-4">
-        <ol className="grid grid-cols-[30px_repeat(7,minmax(0,1fr))] sm:grid-cols-[38px_repeat(7,minmax(0,1fr))]">
-          <li aria-hidden="true" />
-          {rows.map((row, index) => {
-            const today = index === 0;
-            return (
-              <li
-                key={row.date}
-                className={`availability-day min-w-0 border-r border-paper/[0.12] pb-2 last:border-r-0 sm:pb-3 ${today ? "availability-day-today" : ""}`}
-              >
-                <div className="flex min-h-4 justify-center px-0.5 sm:px-1">
-                  <span
-                    className={`truncate text-[8px] font-semibold uppercase tracking-[0.06em] sm:text-[10px] ${
-                      today ? "text-[#f3b08a]" : "text-paper/55"
-                    }`}
-                  >
-                    {today ? t("сегодня") : weekdayShort(row.date, language)}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-baseline justify-center gap-1">
-                  <p className={`text-[13px] leading-none font-semibold tabular-nums sm:text-[16px] ${today ? "text-paper" : "text-paper/85"}`}>
-                    {dayNumber(row.date)}
-                  </p>
-                  <span className="hidden text-[9px] text-paper/40 sm:inline">{monthShort(row.date, language)}</span>
-                </div>
-                <span className="sr-only">{`${weekdayShort(row.date, language)} ${dayNumber(row.date)}: ${row.count} ${t("свободных часов")}`}</span>
-                <p
-                  className={`mt-2 border-r border-paper/[0.08] text-center text-[9px] tabular-nums sm:mt-2.5 sm:text-[11px] ${
-                    today ? "font-semibold text-paper" : "font-medium text-paper/65"
-                  }`}
-                >
-                  {row.count} {t("ч")}
-                </p>
-              </li>
-            );
-          })}
-        </ol>
-        <div className="grid grid-cols-[30px_minmax(0,1fr)] sm:grid-cols-[38px_minmax(0,1fr)]">
-          <div className="availability-axis relative h-[104px] font-mono text-[8px] leading-none text-paper/40 sm:h-[132px] sm:text-[9px]" aria-hidden="true">
-            {axisTicks.map((tick, index) => (
-              <span key={index} className={`absolute right-2 ${index === 0 ? "top-0" : index === axisTicks.length - 1 ? "bottom-0" : "-translate-y-1/2"}`} style={index > 0 && index < axisTicks.length - 1 ? { top: `${index * 25}%` } : undefined}>
-                {Number.isInteger(tick) ? tick : tick.toFixed(1)}
-              </span>
-            ))}
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2.5 rounded-xl border border-on-navy/15 bg-on-navy/[0.035] px-3 pt-4 pb-3 [--chart-height:7rem] sm:gap-3 sm:px-4 sm:[--chart-height:9rem]">
+        <div className="-mt-[7px] flex h-[calc(var(--chart-height)+14px)] flex-col items-end justify-between font-mono text-[13px] leading-[14px] text-on-navy/80" aria-hidden="true">
+          {axisTicks.map((tick) => <span key={tick}>{tick}</span>)}
+        </div>
+        <div className="relative min-w-0">
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex h-[var(--chart-height)] flex-col justify-between" aria-hidden="true">
+            {axisTicks.map((tick) => <div key={tick} className="border-t border-on-navy/15 last:border-on-navy/35" />)}
           </div>
-          <ol className="availability-plot grid h-[104px] grid-cols-7 border-x border-b border-paper/15 sm:h-[132px]" aria-label={t("Свободные часы на неделе")}>
+          <ol className="relative grid grid-cols-7" aria-label={t("Свободные часы на неделе")}>
             {rows.map((row, index) => {
               const today = index === 0;
+              const date = longDate(row.date, language);
               return (
-                <li key={row.date} className="relative min-w-0 border-r border-paper/[0.12] last:border-r-0" role="img" aria-label={`${weekdayShort(row.date, language)} ${dayNumber(row.date)}: ${row.count} ${t("свободных часов")}`}>
-                  <div className={`availability-bar absolute inset-x-[3px] bottom-0 ${today ? "availability-bar-today" : "availability-bar-other"}`} style={{ height: `${Math.min(100, Math.max(0, (row.count / capacity) * 100))}%`, animationDelay: `${index * 35}ms` }} title={`${row.count} ${t("свободных часов")}`} />
+                <li key={row.date} className="min-w-0 text-center">
+                  <div className="relative h-[var(--chart-height)]" role="img" aria-label={`${date}: ${row.count} ${t("свободных часов")}`} title={date}>
+                    <div
+                      className={`availability-bar absolute inset-x-[20%] bottom-0 rounded-t-sm ${today ? "availability-bar-today" : "availability-bar-other"}`}
+                      style={{ height: `${(row.count / scaleMax) * 100}%`, animationDelay: `${index * 35}ms` }}
+                    />
+                  </div>
+                  <span className={`mt-2 block text-[13px] font-semibold uppercase ${today ? "text-chart-highlight-text" : "text-on-navy/80"}`} aria-hidden="true">
+                    {weekdayShort(row.date, language)}
+                  </span>
                 </li>
               );
             })}

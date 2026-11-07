@@ -1,5 +1,5 @@
 export function Logo({ tone = "dark", size = "default" }: { tone?: "dark" | "light"; size?: "default" | "compact" }) {
-  const text = tone === "light" ? "text-paper" : "text-ink";
+  const text = tone === "light" ? "text-on-navy" : "text-ink";
   const sizing = size === "compact" ? "text-[26px] sm:text-[42px]" : "text-[35px] sm:text-[42px]";
 
   return (

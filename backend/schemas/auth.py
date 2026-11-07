@@ -1,6 +1,12 @@
 import re
+from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, field_validator
+from core.phones import normalize_phone
+
+PhoneNumber = Annotated[str, Field(min_length=7, max_length=32), AfterValidator(normalize_phone)]
+NamePart = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+OptionalPatronymic = Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)]
 
 
 def normalize_email(value: str | None) -> str | None:
@@ -13,14 +19,14 @@ def normalize_email(value: str | None) -> str | None:
 
 
 class RegisterRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=255)
-    phone: str = Field(..., min_length=7, max_length=32)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=255)]
+    phone: PhoneNumber
     password: str = Field(..., min_length=8, max_length=128)
     captcha_id: str = Field(..., min_length=32, max_length=32)
     captcha_answer: str = Field(..., pattern=r"^[0-9]{5}$")
-    surname: str | None = Field(default=None, min_length=1, max_length=100)
-    first_name: str | None = Field(default=None, min_length=1, max_length=100)
-    patronymic: str | None = Field(default=None, max_length=100)
+    surname: NamePart | None = None
+    first_name: NamePart | None = None
+    patronymic: OptionalPatronymic | None = None
     email: str | None = Field(default=None, max_length=254)
 
     @field_validator("email")
@@ -30,10 +36,10 @@ class RegisterRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    surname: str = Field(..., min_length=1, max_length=100)
-    first_name: str = Field(..., min_length=1, max_length=100)
-    patronymic: str | None = Field(default=None, max_length=100)
-    phone: str = Field(..., min_length=7, max_length=32)
+    surname: NamePart
+    first_name: NamePart
+    patronymic: OptionalPatronymic | None = None
+    phone: PhoneNumber
     email: str | None = Field(default=None, max_length=254)
 
     @field_validator("email")
@@ -43,12 +49,24 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    phone: str = Field(..., min_length=7, max_length=32)
+    phone: str = Field(min_length=7, max_length=32)
     password: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        normalize_phone(value)
+        return value.strip()
 
 
 class UoLoginRequest(BaseModel):
-    password: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=128)
+    institution_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class UoInstitution(BaseModel):
+    id: str
+    name: str
 
 
 class TokenResponse(BaseModel):

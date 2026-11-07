@@ -49,6 +49,7 @@ export interface BookingRequest {
   date: string;
   startTime: string;
   endTime: string;
+  reservationId?: number;
 }
 
 export interface RentalAgreement {
@@ -60,7 +61,19 @@ export interface RentalAgreement {
 export interface WeeklyReservation extends BookingRequest {
   id: number;
   label: string;
+  weekdays: number[];
+  customerName?: string;
+  endsOn?: string;
 }
+
+export interface CustomerSuggestion {
+  user_id: string;
+  phone: string;
+  name: string;
+}
+
+export type WeeklyReservationInput = Omit<WeeklyReservation, "id" | "customerName"> & { customerPhone?: string; customerId?: string };
+export type ReservedVisit = BookingRequest & { reservationId: number; label: string };
 
 export interface Booking extends Omit<BookingRequest, "listingId"> {
   id: number;

@@ -66,12 +66,12 @@ export function AvailabilityWindowPicker({
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
-        <div className="flex items-center justify-between gap-2 border border-line bg-paper/50 px-3 py-2">
-          <span className="text-[13px] text-ink-soft">{t("Начало доступности")}</span>
+        <div className="flex flex-col gap-1 rounded-lg border border-line bg-paper/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+          <span className="text-[14px] text-ink-soft">{t("Начало доступности")}</span>
           <span className="font-mono text-[16px] font-medium tabular-nums">{startTime}</span>
         </div>
-        <div className="flex items-center justify-between gap-2 border border-line bg-paper/50 px-3 py-2">
-          <span className="text-[13px] text-ink-soft">{t("Конец доступности")}</span>
+        <div className="flex flex-col gap-1 rounded-lg border border-line bg-paper/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+          <span className="text-[14px] text-ink-soft">{t("Конец доступности")}</span>
           <span className="font-mono text-[16px] font-medium tabular-nums">{endTime}</span>
         </div>
       </div>
@@ -84,8 +84,8 @@ export function AvailabilityWindowPicker({
         onPointerUp={endPointer}
         onPointerCancel={endPointer}
       >
-        <div className="interval-slider__rail" />
-        <div className="interval-slider__selection interval-slider__selection--availability" />
+        <div className="interval-slider__rail rounded-lg" />
+        <div className="interval-slider__selection interval-slider__selection--availability rounded-md" />
         <input type="range" min={0} max={MAX_INDEX} step={1} value={startIndex}
           onChange={(event) => updateStart(Number(event.target.value))}
           className="interval-slider__input interval-slider__input--start interval-slider__input--availability"
@@ -96,10 +96,10 @@ export function AvailabilityWindowPicker({
           aria-label={t("Конец доступности")} aria-valuetext={endTime} />
       </div>
 
-      <div className="mt-2 flex justify-between font-mono text-[12px] tabular-nums text-ink-soft" aria-hidden="true">
+      <div className="mt-2 flex justify-between font-mono text-[13px] tabular-nums text-ink-soft" aria-hidden="true">
         <span>14:00</span><span>17:30</span><span>21:00</span>
       </div>
-      <p className="mt-3 text-[12px] leading-relaxed text-ink-mute">
+      <p className="mt-3 text-[14px] leading-relaxed text-ink-soft">
         {t("Клиенты смогут бронировать только внутри этого окна. Минимальная бронь — 1 час; шаг — 15 минут.")}
       </p>
     </div>

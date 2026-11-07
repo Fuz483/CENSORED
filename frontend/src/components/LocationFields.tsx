@@ -20,7 +20,7 @@ export function LocationFields({
     <>
       <div className="min-w-0">
         <label htmlFor={`${prefix}-city`} className="mono-label block">{t("Город")}</label>
-        <select id={`${prefix}-city`} className="field-box mt-1 w-full text-[13px]"
+        <select id={`${prefix}-city`} className="field-box mt-1 rounded-lg"
           value={city} disabled={cityDisabled} required={required}
           onChange={(event) => onCityChange(event.target.value)}>
           <option value="">{t(required ? "Выберите город" : "Все города")}</option>
@@ -29,7 +29,7 @@ export function LocationFields({
       </div>
       <div className="min-w-0">
         <label htmlFor={`${prefix}-district`} className="mono-label block">{t("Район города")}</label>
-        <select id={`${prefix}-district`} className="field-box mt-1 w-full text-[13px]"
+        <select id={`${prefix}-district`} className="field-box mt-1 rounded-lg"
           value={district} disabled={!city || districts.length === 0}
           onChange={(event) => onDistrictChange(event.target.value)}>
           <option value="">{t(!city ? "Сначала выберите город" : districts.length === 0 ? "Без деления на районы" : required ? "Не указан" : "Все районы")}</option>

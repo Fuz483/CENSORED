@@ -30,6 +30,7 @@ app.include_router(bookings.router)
 app.include_router(guard.router)
 app.include_router(finance.router)
 app.include_router(room_photos.router)
+app.include_router(room_photos.media_router)
 
 
 @app.get("/health", tags=["Системные проверки"])

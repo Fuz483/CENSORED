@@ -2,15 +2,12 @@ import asyncio
 import datetime
 from decimal import Decimal
 from sqlalchemy import select
-from db.database import AsyncSessionLocal, Base, engine
+from db.database import AsyncSessionLocal
 from db.models import Booking, RoomListing, User
 
 
 async def seed_database() -> None:
     """Первичное наполнение базы данных с поддержкой почасовых слотов и QR-пропусков."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
     async with AsyncSessionLocal() as session:
         existing_user = (await session.execute(select(User).limit(1))).scalar_one_or_none()
         if existing_user is not None:
@@ -55,6 +52,7 @@ async def seed_database() -> None:
 
         today = datetime.date.today()
         listing_id = await session.scalar(select(RoomListing.id).where(
+            RoomListing.archived_at.is_(None),
             RoomListing.school == "ГУО «Средняя школа № 1 г. Минска»",
             RoomListing.type_room == "sport_hall",
             RoomListing.room == "Спортзал № 1",

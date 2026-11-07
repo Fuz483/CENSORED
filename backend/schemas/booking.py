@@ -3,6 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Annotated, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from schemas.auth import PhoneNumber
 
 
 class RoomType(str, Enum):
@@ -49,6 +50,8 @@ class BookingDetails(BookingInterval):
     type_room: RoomType
     room: str = Field(..., min_length=1, max_length=128)
     user_id: str = Field(..., min_length=1, max_length=64)
+    listing_id: int | None = Field(default=None, gt=0)
+    reservation_id: int | None = Field(default=None, gt=0)
 
 
 class BookingCreate(BookingDetails):
@@ -65,6 +68,29 @@ class RentalAgreement(BaseModel):
 class WeeklyReservationCreate(BookingInterval):
     listing_id: int = Field(gt=0)
     label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    weekdays: list[Annotated[int, Field(strict=True, ge=0, le=6)]] = Field(default_factory=list, max_length=7)
+    customer_phone: PhoneNumber | None = None
+    customer_id: str | None = Field(default=None, min_length=1, max_length=64)
+    ends_on: datetime.date | None = None
+
+
+class WeeklyReservationLink(BaseModel):
+    customer_phone: PhoneNumber
+    customer_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class WeeklyReservationEnd(BaseModel):
+    ends_on: datetime.date
+
+
+class CustomerSearch(BaseModel):
+    phone: str = Field(max_length=32)
+
+
+class CustomerSuggestion(BaseModel):
+    user_id: str
+    phone: str
+    name: str
 
 
 class BookingStateUpdate(BaseModel):
@@ -100,6 +126,18 @@ class TenantBookingResponse(BookingResponse):
 
 class WeeklyReservationResponse(BookingResponse):
     series_label: str
+    weekdays: list[int]
+    customer_name: str | None = None
+    ends_on: datetime.date | None = None
+
+
+class ReservedVisit(BaseModel):
+    reservation_id: int
+    listing_id: int
+    series_label: str
+    date: datetime.date
+    start_time: datetime.time
+    end_time: datetime.time
 
 
 class AvailableSlotInfo(BaseModel):

@@ -20,8 +20,16 @@
   --color-blue: #2b6c9c;
   --color-blue-deep: #1d4f75;
   --color-navy: #0d2437;
+  --color-on-navy: #f2f7fa;
+  --color-on-navy-accent: #f8e3d8;
+  --color-on-navy-success: #75c9c0;
   --color-orange: #c9521f;
   --color-orange-soft: #f8e3d8;
+  --color-action-hover: #b3471a;
+  --color-on-action: #ffffff;
+  --color-chart-highlight: #f3a47b;
+  --color-chart-highlight-text: #f3b08a;
+  --color-chart-series: #75c9c0;
   --color-ok: #3c7c5c;
 }
 
@@ -34,6 +42,48 @@
   --dur-5: 700ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-paper: #101c2b;
+  --color-paper-2: #213247;
+  --color-surface: #18273a;
+  --color-ink: #edf3f9;
+  --color-ink-soft: #c1d0de;
+  --color-ink-mute: #a7b9cb;
+  --color-line: #3a4d63;
+  --color-line-strong: #667e96;
+  --color-navy: #11192d;
+  --color-sky: #9ec6f8;
+  --color-sky-soft: #233d56;
+  --color-blue: #97c8ef;
+  --color-blue-deep: #b7dcfa;
+  --color-orange: #b6a1f5;
+  --color-orange-soft: #34284d;
+  --color-on-navy-accent: #ded0ff;
+  --color-action-hover: #cbbafc;
+  --color-on-action: #201735;
+  --color-chart-highlight: var(--color-orange);
+  --color-chart-highlight-text: var(--color-on-navy-accent);
+  --color-chart-series: #84b7ec;
+  --color-ok: #91d4ac;
+}
+
+@utility page-shell {
+  @apply mx-auto w-full px-4 sm:px-6 xl:px-10 2xl:px-12;
+}
+
+@utility space-card {
+  @apply min-w-0 rounded-xl border border-line bg-surface shadow-sm;
+}
+
+@utility space-card-photo {
+  @apply size-16 shrink-0 rounded-lg min-[360px]:size-20 lg:h-24 lg:w-32;
+}
+
+@utility space-card-title {
+  @apply text-xl leading-tight font-semibold tracking-[-0.02em] wrap-break-word sm:text-[23px];
 }
 
 @layer base {
@@ -53,7 +103,7 @@
 
   ::selection {
     background: var(--color-orange);
-    color: white;
+    color: var(--color-on-action);
   }
 
   :focus-visible {
@@ -79,29 +129,32 @@
   }
 
   .label {
-    @apply text-[13px] font-medium text-ink-soft;
+    @apply text-sm font-medium text-ink-soft;
   }
 
-  .field {
-    @apply h-11 w-full border-0 border-b border-line bg-transparent px-0 text-[15px] text-ink outline-none transition-colors duration-150 placeholder:text-ink-mute/80;
+  .field,
+  .field-box {
+    @apply h-11 w-full rounded-lg border border-line bg-surface px-3 text-base text-ink outline-none transition-colors duration-150 placeholder:text-ink-mute/80;
   }
 
-  .field:hover {
+  .field:hover,
+  .field-box:hover {
     border-color: var(--color-line-strong);
   }
 
-  .field:focus-visible {
+  .field:focus-visible,
+  .field-box:focus-visible {
     outline: none;
-    border-color: var(--color-ink);
-    box-shadow: 0 1px 0 0 var(--color-ink);
+    border-color: var(--color-blue);
+    box-shadow: 0 0 0 2px var(--color-sky-soft);
   }
 
   .btn {
-    @apply inline-flex h-11 items-center justify-center gap-2 rounded-[4px] px-5 text-[14px] font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-lg px-5 text-[15px] font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .btn-primary {
-    @apply bg-orange text-white hover:bg-[#b3471a];
+    @apply bg-orange text-on-action hover:bg-action-hover;
   }
 
   .btn-quiet {
@@ -109,19 +162,19 @@
   }
 
   .hour {
-    @apply inline-flex h-9 min-w-[56px] items-center justify-center rounded-[4px] border border-line bg-transparent px-2.5 text-[13px] font-medium tabular-nums text-ink-soft transition-colors duration-150;
+    @apply inline-flex h-9 min-w-[56px] items-center justify-center rounded-md border border-line bg-transparent px-2.5 text-sm font-medium tabular-nums text-ink-soft transition-colors duration-150;
   }
 
   .panel {
-    @apply rounded-[6px] border border-line bg-surface;
+    @apply rounded-xl border border-line bg-surface;
   }
 
   .select-quiet {
-    @apply cursor-pointer appearance-none border-0 bg-transparent py-1 pr-6 font-sans text-[14px] font-medium text-ink outline-none;
+    @apply cursor-pointer appearance-none rounded-md border-0 bg-transparent py-1 pr-6 font-sans text-base font-medium text-ink outline-none;
   }
 
   .mono-label {
-    @apply font-mono text-[11px] leading-none font-medium tracking-[0.12em] uppercase text-ink-mute;
+    @apply font-mono text-[13px] leading-snug font-medium tracking-[0.08em] uppercase text-ink-mute;
   }
 
   .photo-frame {
@@ -186,13 +239,6 @@
     background: var(--color-orange);
   }
 
-  .availability-plot {
-    background-image: linear-gradient(to top, rgb(242 247 250 / 18%) 1px, transparent 1px);
-    background-size: 100% 25%;
-    background-position: bottom;
-    background-repeat: repeat-y;
-  }
-
   .availability-bar {
     min-height: 0;
     z-index: 1;
@@ -201,15 +247,11 @@
   }
 
   .availability-bar-today {
-    background: #f3a47b;
+    background: var(--color-chart-highlight);
   }
 
   .availability-bar-other {
-    background: #75c9c0;
-  }
-
-  .availability-axis > span {
-    line-height: 1;
+    background: var(--color-chart-series);
   }
 
   .photo-link:hover .photo-frame img,
@@ -218,7 +260,7 @@
   }
 
   .index-tag {
-    @apply absolute top-0 left-0 inline-flex min-w-7 items-center justify-center bg-paper px-1.5 py-1 font-mono text-[10px] leading-none tracking-[0.08em] text-ink;
+    @apply absolute top-0 left-0 inline-flex min-w-7 items-center justify-center rounded-br-md bg-paper px-1.5 py-1 font-mono text-[13px] leading-none tabular-nums text-ink;
   }
 
   .archive-link {
@@ -230,11 +272,7 @@
   }
 
   .sheet-panel {
-    @apply flex max-h-[94dvh] w-full max-w-[560px] flex-col overflow-y-auto rounded-t-[10px] border border-line bg-surface shadow-[0_28px_90px_rgba(13,36,55,0.18)] sm:rounded-[6px];
-  }
-
-  .field-box {
-    @apply h-11 w-full rounded-[3px] border border-line bg-surface px-3 text-[14px] text-ink outline-none transition-colors placeholder:text-ink-mute/70 focus:border-blue;
+    @apply flex max-h-[94dvh] w-full max-w-[560px] flex-col overflow-y-auto rounded-xl border border-line bg-surface shadow-[0_28px_90px_rgba(13,36,55,0.18)];
   }
 
   .guard-scan-frame {
@@ -244,14 +282,14 @@
     width: min(64vw, 230px);
     aspect-ratio: 1;
     transform: translate(-50%, -50%);
-    filter: drop-shadow(0 0 16px rgb(143 196 232 / 24%));
+    filter: drop-shadow(0 0 16px color-mix(in srgb, var(--color-orange) 28%, transparent));
   }
 
   .guard-scan-frame span {
     position: absolute;
     width: 25px;
     height: 25px;
-    border-color: #a8d5f1;
+    border-color: var(--color-orange);
     border-style: solid;
   }
 
@@ -279,7 +317,7 @@
     position: absolute;
     right: 0;
     left: 0;
-    border-radius: 3px;
+    border-radius: 6px;
     pointer-events: none;
   }
 
@@ -290,7 +328,6 @@
     left: var(--range-start);
     width: var(--range-width);
     height: 28px;
-    border-radius: 2px;
     background: var(--color-blue);
     pointer-events: none;
   }
@@ -298,7 +335,7 @@
   .interval-slider__rail {
     top: 8px;
     height: 28px;
-    background: #e3eaf0;
+    background: var(--color-paper-2);
     box-shadow: inset 0 0 0 1px rgb(16 42 63 / 8%);
   }
 
@@ -323,8 +360,8 @@
     z-index: 4;
     width: 22px;
     height: 36px;
-    border: 3px solid white;
-    border-radius: 3px;
+    border: 3px solid var(--color-surface);
+    border-radius: 6px;
     background: var(--color-orange);
     box-shadow: 0 1px 5px rgb(13 36 55 / 32%);
     pointer-events: none;
@@ -379,8 +416,8 @@
     height: 36px;
     margin-top: 4px;
     appearance: none;
-    border: 3px solid white;
-    border-radius: 3px;
+    border: 3px solid var(--color-surface);
+    border-radius: 6px;
     background: var(--color-orange);
     box-shadow: 0 1px 5px rgb(13 36 55 / 32%);
     pointer-events: auto;
@@ -389,8 +426,8 @@
   .interval-slider__input::-moz-range-thumb {
     width: 16px;
     height: 30px;
-    border: 3px solid white;
-    border-radius: 3px;
+    border: 3px solid var(--color-surface);
+    border-radius: 6px;
     background: var(--color-orange);
     box-shadow: 0 1px 5px rgb(13 36 55 / 32%);
     pointer-events: auto;
@@ -521,14 +558,8 @@
     margin-top: 0.5rem;
   }
 
-  .auth-dialog-label {
-    font-size: 0.7rem;
-    line-height: 1rem;
-  }
-
   .auth-dialog-field {
     height: 2rem;
-    font-size: 0.875rem;
   }
 
   .auth-dialog-form > button {

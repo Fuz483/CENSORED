@@ -52,6 +52,10 @@ export function monthShort(iso: string, language: FormatLanguage = "ru"): string
   return (language === "be" ? MONTHS_SHORT_BE : MONTHS_SHORT_RU)[parseISO(iso).getMonth()];
 }
 
+export function monthLong(iso: string, language: FormatLanguage = "ru"): string {
+  return (language === "be" ? MONTHS_LONG_BE : MONTHS_LONG_RU)[parseISO(iso).getMonth()];
+}
+
 export function dayLabel(iso: string, index: number, language: FormatLanguage = "ru"): string {
   if (index === 0) return language === "be" ? "Сёння" : "Сегодня";
   if (index === 1) return language === "be" ? "Заўтра" : "Завтра";
@@ -59,8 +63,7 @@ export function dayLabel(iso: string, index: number, language: FormatLanguage = 
 }
 
 export function longDate(iso: string, language: FormatLanguage = "ru"): string {
-  const month = (language === "be" ? MONTHS_LONG_BE : MONTHS_LONG_RU)[parseISO(iso).getMonth()];
-  return `${weekdayFull(iso, language)}, ${dayNumber(iso)} ${month}`;
+  return `${weekdayFull(iso, language)}, ${dayNumber(iso)} ${monthLong(iso, language)}`;
 }
 
 export function hourLabel(hour: number): string {
@@ -95,6 +98,10 @@ export function intervalPrice(hourlyPrice: number, startTime: string, endTime: s
 
 export function intervalLabel(startTime: string, endTime: string): string {
   return `${startTime}–${endTime}`;
+}
+
+export function minskBookingTime(date: string, time: string): number {
+  return Date.parse(`${date}T${time.slice(0, 5)}:00+03:00`);
 }
 
 export function money(value: number): string {

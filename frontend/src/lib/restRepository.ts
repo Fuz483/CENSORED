@@ -1,8 +1,8 @@
 import { PEXELS_ROOM_IMAGES, toISODate } from "./data";
 import { canonicalCity, canonicalDistrict, cityFromAddress } from "./belarus";
 import { intervalHours } from "./format";
-import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type CaptchaChallenge, type LoginInput, type NewListingInput, type RegisterInput } from "./repository";
-import type { Booking, BookingRequest, BookingState, GuardScanResult, Listing, RentalAgreement, RoomType, Slot, User, WeeklyReservation } from "./types";
+import { PartialBookingError, RepositoryError, type AppRepository, type AppSnapshot, type CaptchaChallenge, type LoginInput, type NewListingInput, type RegisterInput, type UpdateListingInput, type UoInstitution } from "./repository";
+import type { Booking, BookingRequest, BookingState, CustomerSuggestion, GuardScanResult, Listing, RentalAgreement, RoomType, Slot, User, WeeklyReservationInput } from "./types";
 
 type ApiRoomType = "sport_hall" | "assembly_hall" | "it_lab" | "workshop" | "pool";
 const roomTypes: Record<RoomType, ApiRoomType> = {
@@ -26,7 +26,7 @@ interface ApiRoom {
   owner_id?: string | null;
   available_from?: string;
   available_to?: string;
-  image_url?: string;
+  image_url?: string | null;
   available_slots: { start_time: string; end_time: string; price: string | number }[];
 }
 interface ApiRoomListing {
@@ -43,7 +43,7 @@ interface ApiRoomListing {
   price?: string | number;
   available_from?: string;
   available_to?: string;
-  image_url?: string;
+  image_url?: string | null;
 }
 interface ApiBooking {
   id: number;
@@ -66,7 +66,14 @@ interface ApiBooking {
 }
 interface ApiWeeklyReservation extends ApiBooking {
   series_label: string;
+  weekdays: number[];
+  customer_name?: string;
+  ends_on?: string | null;
 }
+type ApiReservedVisit = Pick<ApiBooking, "listing_id" | "date" | "start_time" | "end_time"> & {
+  reservation_id: number;
+  series_label: string;
+};
 interface ApiQrScanResult {
   access_granted: boolean;
   reason: string;
@@ -127,37 +134,42 @@ async function fetchWithTransientProxyRetry(input: RequestInfo | URL, init: Requ
 
 export class RestRepository implements AppRepository {
   private token: string | null = this.readToken();
-  private listings = new Map<string, Listing>();
+  private sessionRevision = 0;
+  private listings = new Map<number, Listing>();
 
   private readToken(): string | null {
     try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; }
   }
 
   logout(): void {
+    this.sessionRevision++;
     this.token = null;
     try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* Keep in-memory logout working. */ }
   }
 
-  private async request<T>(path: string, method = "GET", body?: unknown, authenticated = false): Promise<T> {
-    if (authenticated && !this.token) throw new RepositoryError("Войдите в аккаунт.", "401");
+  private async request<T>(path: string, method = "GET", body?: unknown, authenticated = false, session = this.sessionRevision): Promise<T> {
+    const token = this.token;
+    if (authenticated && (!token || session !== this.sessionRevision)) throw new RepositoryError("Войдите в аккаунт.", "401");
+    const multipart = body instanceof FormData;
     let response: Response;
     try {
       response = await fetchWithTransientProxyRetry(`${baseUrl}/api/v1${path}`, {
         method,
         headers: {
           Accept: "application/json",
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...(authenticated ? { Authorization: `Bearer ${this.token}` } : {}),
+          ...(body === undefined || multipart ? {} : { "Content-Type": "application/json" }),
+          ...(authenticated ? { Authorization: `Bearer ${token}` } : {}),
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(20000),
+        body: multipart ? body : JSON.stringify(body),
+        signal: AbortSignal.timeout(multipart ? 30000 : 20000),
       });
     } catch {
       throw new RepositoryError("Сервер недоступен. Проверьте подключение и повторите попытку.", "NETWORK");
     }
+    if (response.status === 204) return undefined as T;
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401 && authenticated) this.logout();
+      if (response.status === 401 && authenticated && session === this.sessionRevision) this.logout();
       const detail = data?.detail;
       const message = typeof detail === "string" ? detail : Array.isArray(detail)
         ? detail.map((item: { msg?: string }) => item.msg ?? "Проверьте данные.").join(" ")
@@ -178,7 +190,11 @@ export class RestRepository implements AppRepository {
 
   async restoreSession(): Promise<User | null> {
     if (!this.token) return null;
-    try { return this.supportedUser(mapApiUser(await this.request<ApiUser>("/auth/me", "GET", undefined, true))); }
+    const session = this.sessionRevision;
+    try {
+      const user = await this.request<ApiUser>("/auth/me", "GET", undefined, true);
+      return session === this.sessionRevision ? this.supportedUser(mapApiUser(user)) : null;
+    }
     catch (error) {
       if (error instanceof RepositoryError && error.code === "401") return null;
       throw error;
@@ -186,7 +202,9 @@ export class RestRepository implements AppRepository {
   }
 
   private async authenticate(path: string, body: unknown): Promise<User> {
+    const session = ++this.sessionRevision;
     const result = await this.request<{ access_token: string; user: ApiUser }>(path, "POST", body);
+    if (session !== this.sessionRevision) throw new RepositoryError("Войдите в аккаунт.", "401");
     const user = this.supportedUser(mapApiUser(result.user));
     this.token = result.access_token;
     try { sessionStorage.setItem(TOKEN_KEY, this.token); } catch { /* Session remains usable in this tab. */ }
@@ -194,8 +212,14 @@ export class RestRepository implements AppRepository {
   }
 
   async login(input: LoginInput): Promise<User> {
-    if (input.role === "master") return this.authenticate("/auth/uo/login", { password: input.password });
+    if (input.role === "master") return this.authenticate("/auth/uo/login", {
+      password: input.password, institution_id: input.institutionId,
+    });
     return this.authenticate("/auth/login", { phone: input.phone.trim(), password: input.password });
+  }
+
+  listUoInstitutions(): Promise<UoInstitution[]> {
+    return this.request("/auth/uo/institutions");
   }
 
   async register(input: RegisterInput): Promise<User> {
@@ -211,30 +235,29 @@ export class RestRepository implements AppRepository {
     return this.request("/auth/captcha");
   }
 
-  private listing(room: ApiRoomListing, details?: ApiRoomListing): Listing {
-    const key = JSON.stringify([room.school, room.type_room, room.room]);
-    const existing = this.listings.get(key);
-    const address = details?.address ?? existing?.address ?? "Адрес уточняется";
-    const city = details?.city ? canonicalCity(details.city) || details.city : existing?.city || cityFromAddress(address);
-    const district = details?.city_district ?? existing?.cityDistrict ?? "";
-    const listing: Listing = {
+  private listing(room: ApiRoomListing): Listing {
+    const address = room.address ?? "Адрес уточняется";
+    const city = room.city ? canonicalCity(room.city) || room.city : cityFromAddress(address);
+    const district = room.city_district ?? "";
+    return {
       id: room.id,
       school: room.school, room: room.room, type: uiTypes[room.type_room],
-      uo: details?.uo ?? existing?.uo ?? "",
+      uo: room.uo ?? "",
       address, city, cityDistrict: canonicalDistrict(city, district) || district,
-      capacity: details?.capacity ?? existing?.capacity ?? null,
-      price: details ? Number(details.price) : existing?.price ?? 0,
-      availableFrom: details?.available_from?.slice(0, 5) ?? existing?.availableFrom ?? "14:00",
-      availableTo: details?.available_to?.slice(0, 5) ?? existing?.availableTo ?? "21:00",
-      ownerId: details?.owner_id ?? existing?.ownerId ?? (room.school === "Лицей БГУ" ? "UO-BSU-LYCEUM-DEMO" : ""),
-      image: resolveImageUrl(details?.image_url ?? existing?.image ?? PEXELS_ROOM_IMAGES[uiTypes[room.type_room]]),
+      capacity: room.capacity ?? null,
+      price: Number(room.price ?? 0),
+      availableFrom: room.available_from?.slice(0, 5) ?? "14:00",
+      availableTo: room.available_to?.slice(0, 5) ?? "21:00",
+      ownerId: room.owner_id ?? (room.school === "Лицей БГУ" ? "UO-BSU-LYCEUM-DEMO" : ""),
+      image: resolveImageUrl(room.image_url ?? PEXELS_ROOM_IMAGES[uiTypes[room.type_room]]),
     };
-    this.listings.set(key, listing);
-    return listing;
   }
 
-  private booking(item: ApiBooking, user: User): Booking {
-    const listing = this.listing({ ...item, id: item.listing_id });
+  private booking(item: ApiBooking, user: User, listings = this.listings): Booking {
+    const current = listings.get(item.listing_id);
+    const listing = current
+      ? { ...current, school: item.school, room: item.room, type: uiTypes[item.type_room] }
+      : this.listing({ id: item.listing_id, school: item.school, room: item.room, type_room: item.type_room });
     const startTime = item.start_time.slice(0, 5);
     const endTime = item.end_time.slice(0, 5);
     return {
@@ -248,15 +271,17 @@ export class RestRepository implements AppRepository {
   }
 
   async load(user?: User): Promise<AppSnapshot> {
-    const [rooms, history, weekly] = await Promise.all([
+    const session = this.sessionRevision;
+    const [rooms, history, weekly, visits] = await Promise.all([
       this.request<ApiRoom[]>(`/rooms/catalog?start=${toISODate(new Date())}`),
       user ? this.request<ApiBooking[]>(user.role === "master" ? "/uo/bookings" : `/bookings/user/${encodeURIComponent(user.user_id)}`, "GET", undefined, true) : [],
       user?.role === "master" ? this.request<ApiWeeklyReservation[]>("/uo/weekly-reservations", "GET", undefined, true) : [],
+      user?.role === "tenant" ? this.request<ApiReservedVisit[]>("/bookings/reserved-visits", "GET", undefined, true) : [],
     ]);
     const slots: Slot[] = [];
     const currentListings = new Map<number, Listing>();
     for (const room of rooms) {
-      const listing = this.listing(room, room);
+      const listing = currentListings.get(room.id) ?? this.listing(room);
       currentListings.set(listing.id, listing);
       for (const slot of room.available_slots) {
         if (new Date(`${room.date}T${slot.start_time}`).getTime() <= Date.now()) continue;
@@ -267,11 +292,18 @@ export class RestRepository implements AppRepository {
         });
       }
     }
+    if (session === this.sessionRevision) this.listings = currentListings;
     return {
       listings: [...currentListings.values()], slots,
-      bookings: user ? history.map((item) => this.booking(item, user)) : [],
+      bookings: user ? history.map((item) => this.booking(item, user, currentListings)) : [],
       weeklyReservations: weekly.map((item) => ({
         id: item.id, listingId: item.listing_id, label: item.series_label, date: item.date,
+        startTime: item.start_time.slice(0, 5), endTime: item.end_time.slice(0, 5),
+        weekdays: item.weekdays, customerName: item.customer_name,
+        endsOn: item.ends_on ?? undefined,
+      })),
+      reservedVisits: visits.map((item) => ({
+        reservationId: item.reservation_id, listingId: item.listing_id, label: item.series_label, date: item.date,
         startTime: item.start_time.slice(0, 5), endTime: item.end_time.slice(0, 5),
       })),
     };
@@ -279,38 +311,23 @@ export class RestRepository implements AppRepository {
 
   async uploadRoomPhoto(user: User, listing: Listing, file: File): Promise<void> {
     if (user.role !== "master") throw new RepositoryError("Нет доступа к изменению фото.", "403");
-    if (!this.token) throw new RepositoryError("Войдите в аккаунт.", "401");
     const form = new FormData();
+    form.set("listing_id", String(listing.id));
     form.set("school", listing.school);
     form.set("type_room", roomTypes[listing.type]);
     form.set("room", listing.room);
     form.set("file", file);
 
-    let response: Response;
-    try {
-      response = await fetchWithTransientProxyRetry(`${baseUrl}/api/v1/rooms/photo`, {
-        method: "POST",
-        headers: { Accept: "application/json", Authorization: `Bearer ${this.token}` },
-        body: form,
-        signal: AbortSignal.timeout(30000),
-      });
-    } catch {
-      throw new RepositoryError("Сервер недоступен. Проверьте подключение и повторите попытку.", "NETWORK");
-    }
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      if (response.status === 401) this.logout();
-      const detail = data?.detail;
-      throw new RepositoryError(typeof detail === "string" ? detail : `Ошибка сервера (${response.status}).`, String(response.status));
-    }
+    const data = await this.request<{ image_url: string }>("/rooms/photo", "POST", form, true);
     if (typeof data?.image_url !== "string") throw new RepositoryError("Сервер вернул некорректный ответ.");
   }
 
   private bookingPayload(user: User, request: BookingRequest) {
-    const listing = [...this.listings.values()].find((item) => item.id === request.listingId);
+    const listing = this.listings.get(request.listingId);
     if (!listing) throw new RepositoryError("Помещение не найдено.");
-    return { school: listing.school, type_room: roomTypes[listing.type], room: listing.room,
-      date: request.date, start_time: request.startTime, hours: intervalHours(request.startTime, request.endTime), user_id: user.user_id };
+    return { listing_id: listing.id, school: listing.school, type_room: roomTypes[listing.type], room: listing.room,
+      date: request.date, start_time: request.startTime, hours: intervalHours(request.startTime, request.endTime),
+      user_id: user.user_id, reservation_id: request.reservationId };
   }
 
   async previewAgreements(user: User, requests: BookingRequest[]): Promise<RentalAgreement[]> {
@@ -323,14 +340,16 @@ export class RestRepository implements AppRepository {
     if (!requests.length || agreementTokens.length !== requests.length || agreementTokens.some((token) => !token)) {
       throw new RepositoryError("Откройте договор аренды и подтвердите согласие.");
     }
+    const session = this.sessionRevision;
+    const listings = this.listings;
     const payloads = requests.map((item, index) => ({
       ...this.bookingPayload(user, item), agreement_accepted: true, agreement_token: agreementTokens[index],
     }));
     const created: Booking[] = [];
     for (const payload of payloads) {
       try {
-        const result = await this.request<ApiBooking[]>("/bookings", "POST", payload, true);
-        created.push(...result.map((item) => this.booking(item, user)));
+        const result = await this.request<ApiBooking[]>("/bookings", "POST", payload, true, session);
+        created.push(...result.map((item) => this.booking(item, user, listings)));
       } catch (error) {
         if (created.length) throw new PartialBookingError("Часть броней создана. Проверьте историю перед повторной попыткой.", created);
         throw error;
@@ -339,11 +358,26 @@ export class RestRepository implements AppRepository {
     return created;
   }
 
-  async createWeeklyReservation(input: Omit<WeeklyReservation, "id">): Promise<void> {
+  async createWeeklyReservation(input: WeeklyReservationInput): Promise<void> {
     await this.request("/uo/weekly-reservations", "POST", {
       listing_id: input.listingId, label: input.label, date: input.date, start_time: input.startTime,
       hours: intervalHours(input.startTime, input.endTime),
+      weekdays: input.weekdays, customer_phone: input.customerPhone?.trim() || undefined,
+      customer_id: input.customerId,
+      ends_on: input.endsOn || undefined,
     }, true);
+  }
+
+  async linkWeeklyCustomer(id: number, phone: string, customerId?: string): Promise<void> {
+    await this.request(`/uo/weekly-reservations/${id}/customer`, "PATCH", { customer_phone: phone.trim(), customer_id: customerId }, true);
+  }
+
+  searchCustomers(phone: string): Promise<CustomerSuggestion[]> {
+    return this.request("/uo/customers/search", "POST", { phone }, true);
+  }
+
+  async setWeeklyEndDate(id: number, endsOn: string): Promise<void> {
+    await this.request(`/uo/weekly-reservations/${id}/end-date`, "PATCH", { ends_on: endsOn }, true);
   }
 
   async cancelWeeklyReservation(id: number): Promise<void> {
@@ -368,68 +402,70 @@ export class RestRepository implements AppRepository {
     };
   }
 
-  async cancelBooking(_user: User, id: number): Promise<void> {
-    await this.request(`/bookings/${id}/state`, "PATCH", { state: "cancelled" }, true);
+  async cancelBooking(user: User, id: number): Promise<void> {
+    if (user.role === "master") {
+      await this.request(`/uo/bookings/${id}/cancel`, "PATCH", undefined, true);
+    } else {
+      await this.request(`/bookings/${id}/state`, "PATCH", { state: "cancelled" }, true);
+    }
   }
 
   async updateProfile(_user: User, input: import("./repository").ProfileInput): Promise<User> {
+    const session = this.sessionRevision;
     const updated = await this.request<ApiUser>("/auth/me", "PATCH", {
       surname: input.surname.trim(), first_name: input.firstName.trim(),
       patronymic: input.patronymic.trim() || null, email: input.email.trim() || null, phone: input.phone.trim(),
     }, true);
+    if (session !== this.sessionRevision) throw new RepositoryError("Войдите в аккаунт.", "401");
     return this.supportedUser(mapApiUser(updated));
   }
   async addListing(user: User, input: NewListingInput): Promise<Listing> {
     if (user.role !== "master") throw new RepositoryError("Нет доступа к добавлению пространства.", "403");
+    return this.saveListing("/rooms", "POST", input);
+  }
+
+  async updateListing(user: User, listingId: number, input: UpdateListingInput): Promise<Listing> {
+    if (user.role !== "master") throw new RepositoryError("Нет доступа к изменению пространства.", "403");
+    return this.saveListing(`/rooms/${listingId}`, "PATCH", input);
+  }
+
+  private async saveListing(path: string, method: "POST" | "PATCH", input: UpdateListingInput): Promise<Listing> {
     if (!this.token) throw new RepositoryError("Войдите в аккаунт.", "401");
-    let photo: Blob;
-    try {
-      photo = await (await fetch(input.image)).blob();
-    } catch {
-      throw new RepositoryError("Не удалось подготовить фотографию помещения.");
-    }
-    if (!photo.type.startsWith("image/")) throw new RepositoryError("Добавьте фотографию помещения.");
-
+    const session = this.sessionRevision;
     const form = new FormData();
-    form.set("school", input.school.trim());
-    form.set("uo", input.uo.trim());
-    form.set("type_room", roomTypes[input.type]);
-    form.set("room", input.room.trim());
-    form.set("address", input.address.trim());
-    if (input.city) form.set("city", input.city);
-    if (input.cityDistrict) form.set("city_district", input.cityDistrict);
-    form.set("capacity", String(input.capacity));
-    form.set("price", String(input.price));
-    form.set("available_from", input.availableFrom);
-    form.set("available_to", input.availableTo);
-    form.set("file", new File([photo], "room-photo.jpg", { type: photo.type }));
-
-    let response: Response;
-    try {
-      response = await fetchWithTransientProxyRetry(`${baseUrl}/api/v1/rooms`, {
-        method: "POST",
-        headers: { Accept: "application/json", Authorization: `Bearer ${this.token}` },
-        body: form,
-        signal: AbortSignal.timeout(30000),
-      });
-    } catch {
-      throw new RepositoryError("Сервер недоступен. Проверьте подключение и повторите попытку.", "NETWORK");
+    const fields = {
+      school: input.school, uo: input.uo, type_room: input.type === undefined ? undefined : roomTypes[input.type],
+      room: input.room, address: input.address, city: input.city, city_district: input.cityDistrict,
+      capacity: input.capacity, price: input.price, available_from: input.availableFrom, available_to: input.availableTo,
+    };
+    for (const [name, value] of Object.entries(fields)) {
+      if (value !== undefined) form.set(name, String(value ?? "").trim());
     }
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      if (response.status === 401) this.logout();
-      const detail = data?.detail;
-      throw new RepositoryError(typeof detail === "string" ? detail : `Ошибка сервера (${response.status}).`, String(response.status));
+    if (input.image !== undefined) {
+      let photo: Blob;
+      try {
+        photo = await (await fetch(input.image)).blob();
+      } catch {
+        throw new RepositoryError("Не удалось подготовить фотографию помещения.");
+      }
+      if (!photo.type.startsWith("image/")) throw new RepositoryError("Добавьте фотографию помещения.");
+      form.set("file", photo, "room-photo.jpg");
     }
-    if (!data || typeof data.school !== "string" || typeof data.room !== "string" || typeof data.image_url !== "string") {
+    const data = await this.request<ApiRoomListing>(path, method, form, true, session);
+    if (!data || typeof data.id !== "number" || typeof data.school !== "string" || typeof data.room !== "string") {
       throw new RepositoryError("Сервер вернул некорректные данные помещения.");
     }
-    const apiListing: ApiRoomListing = data;
-    const listing = this.listing(apiListing, apiListing);
-    this.listings.set(JSON.stringify([apiListing.school, apiListing.type_room, apiListing.room]), listing);
+    const listing = this.listing(data);
+    if (session === this.sessionRevision) this.listings.set(listing.id, listing);
     return listing;
   }
-  async updateListing(): Promise<never> { throw new RepositoryError("Управление помещениями пока недоступно."); }
-  async deleteListing(): Promise<never> { throw new RepositoryError("Управление помещениями пока недоступно."); }
+
+  async deleteListing(user: User, listingId: number): Promise<void> {
+    if (user.role !== "master") throw new RepositoryError("Нет доступа к удалению пространства.", "403");
+    const session = this.sessionRevision;
+    await this.request<void>(`/rooms/${listingId}`, "DELETE", undefined, true);
+    if (session === this.sessionRevision) this.listings.delete(listingId);
+  }
+
   async createManualBooking(): Promise<never> { throw new RepositoryError("Ручное бронирование пока недоступно."); }
 }

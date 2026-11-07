@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 
+import { useDialog } from "../hooks/useDialog";
 import { ROOM_TYPES, nextDays, toISODate } from "../lib/data";
 import { dayNumber, durationLabel, intervalHours, intervalLabel, intervalPrice, money, monthShort, weekdayShort } from "../lib/format";
 import type { Booking } from "../lib/types";
@@ -43,6 +44,7 @@ export function ManualBookingDialog({
   const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useDialog<HTMLDivElement>(onClose, { open: open && Boolean(user) });
 
   const listing = ownListings.find((item) => item.id === listingId);
   const free = listing ? freeSlots(slots, listing.id, date) : [];
@@ -50,20 +52,6 @@ export function ManualBookingDialog({
   const validRange = Boolean(listing && isRangeAvailable(slots, listing.id, date, startTime, endTime));
   const selectedHours = intervalHours(startTime, endTime);
   const total = listing ? intervalPrice(listing.price, startTime, endTime) : 0;
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previous;
-    };
-  }, [onClose, open]);
 
   if (!open || !user) return null;
 
@@ -121,18 +109,20 @@ export function ManualBookingDialog({
 
   return (
     <div
-      className="overlay-in fixed inset-0 z-50 flex items-end justify-center bg-navy/50 sm:items-center sm:p-4"
+      className="overlay-in fixed inset-0 z-50 flex items-end justify-center bg-navy/50 p-2 sm:items-center sm:p-4"
       onClick={onClose}
       role="presentation"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="manual-booking-title"
-        className="sheet-in flex max-h-[94dvh] w-full max-w-[580px] flex-col overflow-y-auto rounded-t-[10px] border border-line bg-surface sm:rounded-[6px] sm:shadow-[0_24px_80px_rgba(13,36,55,0.18)]"
+        className="sheet-in flex max-h-[calc(100dvh-1rem)] w-full max-w-[580px] flex-col overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface outline-none sm:max-h-[calc(100dvh-2rem)] sm:shadow-[0_24px_80px_rgba(13,36,55,0.18)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4 sm:px-6">
+        <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-4 py-2.5 sm:px-6 sm:py-4">
           <div>
             <h2
               id="manual-booking-title"
@@ -144,7 +134,7 @@ export function ManualBookingDialog({
           <button
             type="button"
             onClick={onClose}
-            className="grid size-8 shrink-0 place-items-center text-ink-mute transition-colors hover:text-ink"
+            className="grid size-11 shrink-0 place-items-center rounded-full text-ink-mute transition-colors hover:bg-paper hover:text-ink sm:size-9"
             aria-label={t("Закрыть")}
           >
             <X className="size-4" strokeWidth={1.8} />
@@ -179,15 +169,15 @@ export function ManualBookingDialog({
             </div>
 
             {listing && (
-              <div className="mt-4 flex items-center gap-3 border border-line bg-paper/45 p-2.5">
-                <div className="photo-frame aspect-[4/3] w-[72px] shrink-0">
+              <div className="mt-4 flex items-center gap-3 rounded-lg border border-line bg-paper/45 p-2.5">
+                <div className="photo-frame aspect-[4/3] w-[72px] shrink-0 rounded-lg">
                   <img src={listing.image} alt={`${t(listing.room)}, ${t(listing.school)}`} />
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-[14px] font-medium">
                     {t(listing.school)} · {t(listing.room)}
                   </p>
-                  <p className="mt-1 text-[13px] leading-relaxed text-ink-soft">
+                  <p className="mt-1 text-[14px] leading-relaxed text-ink-soft">
                     {listing.address} · до {listing.capacity} человек · {money(listing.price)} за час
                   </p>
                 </div>
@@ -196,7 +186,7 @@ export function ManualBookingDialog({
 
             <div className="mt-5">
               <span className="label mb-2 block">{t("Дата")}</span>
-              <div className="grid grid-cols-7 gap-1">
+              <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-7 sm:gap-1">
                 {dates.map((item, index) => {
                   const active = item === date;
                   return (
@@ -205,19 +195,19 @@ export function ManualBookingDialog({
                       type="button"
                       onClick={() => changeDate(item)}
                       aria-pressed={active}
-                      className={`flex flex-col items-center gap-1 border px-1 py-2 transition-colors ${
+                      className={`flex flex-col items-center gap-1 rounded-lg border px-1 py-2 transition-colors ${
                         active
-                          ? "border-orange bg-orange text-white"
+                          ? "border-orange bg-orange text-on-action"
                           : "border-line text-ink-soft hover:border-blue"
                       }`}
                     >
-                      <span className="font-mono text-[11px] tracking-[0.02em] uppercase opacity-85">
+                      <span className="font-mono text-[13px] tracking-[0.02em] uppercase opacity-85">
                         {index === 0 ? t("сегодня") : weekdayShort(item, language)}
                       </span>
                       <span className="font-serif text-[15px] leading-none font-medium tabular-nums">
                         {dayNumber(item)}
                       </span>
-                      <span className="font-mono text-[10px] leading-none opacity-85">
+                      <span className="font-mono text-[13px] leading-none opacity-85">
                         {monthShort(item, language)}
                       </span>
                     </button>
@@ -229,7 +219,7 @@ export function ManualBookingDialog({
             <div className="mt-5">
               <div className="mb-2 flex items-baseline justify-between gap-3">
                 <span className="label">{t("Доступность")}</span>
-                <span className="font-mono text-[12px] uppercase tracking-[0.04em] text-ink-soft">
+                <span className="font-mono text-[14px] uppercase tracking-[0.04em] text-ink-soft">
                   {freeSlotHours(free)} ч
                 </span>
               </div>
@@ -242,7 +232,7 @@ export function ManualBookingDialog({
                   onChange={(start, end) => { setStartTime(start); setEndTime(end); setError(null); }}
                 />
               ) : (
-                <p className="border border-line bg-paper/45 px-3 py-3 text-[14px] text-ink-soft">
+                <p className="rounded-lg border border-line bg-paper/45 px-3 py-3 text-[14px] text-ink-soft">
                   {t("На этот день свободных часов нет. Выберите другую дату.")}
                 </p>
               )}
@@ -293,20 +283,20 @@ export function ManualBookingDialog({
                   onChange={(event) => setNote(event.target.value)}
                   rows={2}
                   placeholder={t("Что важно знать администратору")}
-                  className="w-full resize-none rounded-[3px] border border-line bg-surface px-3 py-2 text-[14px] text-ink outline-none transition-colors placeholder:text-ink-mute/70 focus:border-blue"
+                  className="w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-[16px] text-ink outline-none transition-colors placeholder:text-ink-mute/70 focus:border-blue"
                 />
               </div>
             </div>
 
             {error && (
-              <p role="alert" className="mt-4 text-[12px] leading-relaxed text-orange">
+              <p role="alert" className="mt-4 border-l-2 border-orange pl-3 text-[14px] leading-relaxed text-ink">
                 {error}
               </p>
             )}
 
             <div className="mt-6 border-t border-line pt-4">
               <div className="flex items-baseline justify-between gap-4">
-                <span className="text-[12.5px] text-ink-soft">
+                <span className="text-[14px] text-ink-soft">
                   {validRange
                     ? `${durationLabel(selectedHours, language)} · ${intervalLabel(startTime, endTime)}`
                     : t("Интервал недоступен")}
@@ -323,7 +313,7 @@ export function ManualBookingDialog({
                   {t("Создать бронь")}
                 </button>
               </div>
-              <p className="mt-3 text-center text-[11.5px] text-ink-mute">
+              <p className="mt-3 text-center text-[14px] text-ink-soft">
                 {t("Бронь сразу займёт выбранный интервал и появится в списке.")}
               </p>
             </div>

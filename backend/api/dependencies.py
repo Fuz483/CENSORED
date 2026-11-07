@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from core.security import decode_access_token
-from core.uo_demo import UO_DEMO_USER_ID
+from core.uo_demo import is_demo_institution
 from db.database import get_db
 from db.models import User
 
@@ -33,7 +33,13 @@ async def get_current_tenant(user: Annotated[User, Depends(get_current_user)]) -
     return user
 
 
+async def get_current_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Эта операция доступна администратору.")
+    return user
+
+
 async def get_current_school(user: Annotated[User, Depends(get_current_user)]) -> User:
-    if user.role != "master" or (user.user_id == UO_DEMO_USER_ID and not settings.UO_DEMO_ENABLED):
+    if user.role != "master" or (is_demo_institution(user.user_id) and not settings.UO_DEMO_ENABLED):
         raise HTTPException(status_code=403, detail="Нет доступа к кабинету УО.")
     return user

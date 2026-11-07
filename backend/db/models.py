@@ -4,14 +4,17 @@ from typing import List, Optional
 from sqlalchemy import (
     Date,
     DateTime,
+    Boolean,
     Float,
     ForeignKey,
     Integer,
+    Index,
+    LargeBinary,
     Numeric,
     String,
     Text,
     Time,
-    UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.database import Base
@@ -21,11 +24,19 @@ class User(Base):
     """Модель пользователя платформы."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        Index(
+            "uq_registered_tenant_phone", "phone", unique=True,
+            postgresql_where=text("role = 'tenant' AND password_hash IS NOT NULL AND legacy_phone IS NULL"),
+            sqlite_where=text("role = 'tenant' AND password_hash IS NOT NULL AND legacy_phone IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    legacy_phone: Mapped[Optional[str]] = mapped_column(String(32))
     surname: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     patronymic: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -39,6 +50,7 @@ class User(Base):
         "Booking",
         back_populates="user",
         cascade="all, delete-orphan",
+        foreign_keys="Booking.user_id",
     )
 
 
@@ -65,11 +77,20 @@ class Booking(Base):
         nullable=False,
     )
     series_label: Mapped[Optional[str]] = mapped_column(String(120))
+    series_group_id: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    series_ends_on: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    series_tenant_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.user_id", ondelete="SET NULL"), index=True,
+    )
+    reservation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("orders.id", ondelete="SET NULL"), index=True,
+    )
+    cancelled_by_school: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     agreement_version: Mapped[Optional[str]] = mapped_column(String(32))
     agreement_text: Mapped[Optional[str]] = mapped_column(Text)
     agreement_accepted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))
 
-    user: Mapped["User"] = relationship("User", back_populates="bookings")
+    user: Mapped["User"] = relationship("User", back_populates="bookings", foreign_keys=[user_id])
 
 
 class RoomListing(Base):
@@ -77,7 +98,11 @@ class RoomListing(Base):
 
     __tablename__ = "listings"
     __table_args__ = (
-        UniqueConstraint("school", "type_room", "room", name="uq_room_listing_location"),
+        Index(
+            "uq_room_listing_location", "school", "type_room", "room", unique=True,
+            postgresql_where=text("archived_at IS NULL"),
+            sqlite_where=text("archived_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -97,3 +122,6 @@ class RoomListing(Base):
     available_to: Mapped[datetime.time] = mapped_column(Time, nullable=False)
     image_url: Mapped[Optional[str]] = mapped_column(String(512))
     image_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    photo_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, deferred=True)
+    photo_type: Mapped[Optional[str]] = mapped_column(String(32))
+    archived_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))

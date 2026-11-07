@@ -25,6 +25,6 @@ def build_rental_agreement(
         "Бронь можно отменить через личный кабинет не позднее чем за два часа до начала.",
         "Этот текст используется для показа работы сервиса на демо.",
     ))
-    message = json.dumps([AGREEMENT_VERSION, listing.id, tenant.user_id, text]).encode()
+    message = json.dumps([AGREEMENT_VERSION, listing.id, tenant.user_id, booking.reservation_id, text]).encode()
     token = hmac.new(settings.JWT_SECRET_KEY.encode(), message, hashlib.sha256).hexdigest()
     return RentalAgreement(version=AGREEMENT_VERSION, text=text, token=token)

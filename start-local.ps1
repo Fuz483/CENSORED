@@ -28,6 +28,14 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL could not start." }
 }
 
+Push-Location $backendPath
+try {
+    & $python -m alembic upgrade head
+    if ($LASTEXITCODE -ne 0) { throw "Database migration failed; frontend was not started." }
+} finally {
+    Pop-Location
+}
+
 $backendHealthUrl = "http://127.0.0.1:8000/health"
 if (-not (Test-Endpoint $backendHealthUrl)) {
     $backendListener = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
@@ -44,15 +52,6 @@ if (-not (Test-Endpoint $backendHealthUrl)) {
 
     $remainingListener = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
     if ($remainingListener) { throw "Port 8000 did not become available after stopping the unresponsive API process." }
-
-    Push-Location $backendPath
-    try {
-        & $python -m alembic upgrade head
-        if ($LASTEXITCODE -ne 0) { throw "Database migration failed; the API was not started." }
-
-    } finally {
-        Pop-Location
-    }
 
 }
 

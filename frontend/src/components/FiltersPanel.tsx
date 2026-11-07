@@ -1,6 +1,7 @@
 import type { ChangeEvent, ReactNode } from "react";
 import { Search, X } from "lucide-react";
 
+import { useDialog } from "../hooks/useDialog";
 import { ROOM_TYPE_LIST, ROOM_TYPES } from "../lib/data";
 import type { Filters } from "../lib/types";
 import { useLanguage } from "../lib/i18n";
@@ -41,7 +42,7 @@ export function FiltersBar({ filters, onChange, onReset, schools, cities, distri
   const active = activeFilterCount(filters) > 0;
 
   return (
-    <div className="hidden grid-cols-[1.3fr_repeat(4,minmax(0,1fr))_auto] items-end gap-4 border-y border-ink/15 py-3 lg:grid">
+    <div className="hidden grid-cols-[repeat(2,minmax(0,1fr))_minmax(0,1.3fr)_repeat(2,minmax(0,1fr))_auto] items-end gap-3 rounded-xl border border-line bg-surface p-4 lg:grid">
       <LocationFields prefix="catalog" city={filters.city} district={filters.district} cities={cities} districts={districts}
         onCityChange={(city) => onChange({ city, district: "" })} onDistrictChange={(district) => onChange({ district })} />
       <SchoolSelect filters={filters} onChange={onChange} schools={schools} />
@@ -52,7 +53,7 @@ export function FiltersBar({ filters, onChange, onReset, schools, cities, distri
         type="button"
         onClick={onReset}
         disabled={!active}
-        className="ml-auto pb-1.5 text-[13px] text-ink-mute underline decoration-line-strong underline-offset-4 transition-colors hover:text-ink hover:decoration-orange disabled:invisible"
+        className="btn btn-quiet h-11 rounded-lg px-3 text-[14px] disabled:invisible"
       >
         {t("Сбросить")}
       </button>
@@ -68,34 +69,37 @@ export function FiltersSheet({
   ...props
 }: FiltersProps & { open: boolean; onClose: () => void; resultCount: number }) {
   const { t } = useLanguage();
+  const dialogRef = useDialog<HTMLDivElement>(onClose, { open });
   if (!open) return null;
 
   return (
     <div
-      className="overlay-in fixed inset-0 z-50 flex items-end bg-navy/45 lg:hidden"
+      className="overlay-in fixed inset-0 z-50 flex items-end bg-navy/45 p-2 lg:hidden"
       onClick={onClose}
       role="presentation"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label={t("Фильтры")}
-        className="sheet-in max-h-[92dvh] w-full overflow-y-auto rounded-t-[10px] bg-paper p-5 pb-6"
+        aria-labelledby="filter-sheet-title"
+        className="sheet-in max-h-[calc(100dvh-1rem)] w-full overflow-y-auto overscroll-contain rounded-xl bg-paper outline-none"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-[20px] tracking-[-0.02em]">{t("Фильтры")}</h2>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-paper px-4 py-2.5 sm:px-5">
+          <h2 id="filter-sheet-title" className="text-[20px] tracking-[-0.02em]">{t("Фильтры")}</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label={t("Закрыть")}
-            className="grid size-8 place-items-center text-ink-mute transition-colors hover:text-ink"
+            className="grid size-11 place-items-center rounded-full text-ink-mute transition-colors hover:bg-paper-2 hover:text-ink"
           >
             <X className="size-4" strokeWidth={1.8} />
           </button>
         </div>
 
-        <div className="mt-6 space-y-5">
+        <div className="space-y-4 px-4 py-4 sm:px-5">
           <LocationFields prefix="sheet" city={props.filters.city} district={props.filters.district}
             cities={props.cities} districts={props.districts}
             onCityChange={(city) => props.onChange({ city, district: "" })}
@@ -105,15 +109,15 @@ export function FiltersSheet({
           <TimeSelect filters={props.filters} onChange={props.onChange} idPrefix="sheet-" />
         </div>
 
-        <div className="mt-7 flex items-center gap-5 border-t border-line pt-4">
+        <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-4 sm:px-5">
           <button
             type="button"
             onClick={props.onReset}
-            className="text-[13px] text-ink-mute underline decoration-line-strong underline-offset-4 hover:text-ink"
+            className="btn btn-quiet h-11 rounded-lg px-3 text-[14px]"
           >
             {t("Сбросить")}
           </button>
-          <button type="button" onClick={onClose} className="btn btn-primary ml-auto h-11 px-4">
+          <button type="button" onClick={onClose} className="btn btn-primary ml-auto h-11 rounded-lg px-4 text-[15px]">
             {t("Показать ")}{resultCount}
           </button>
         </div>
@@ -132,7 +136,7 @@ function SchoolSelect({
   const { t } = useLanguage();
   const id = `${idPrefix}school-search`;
   return (
-    <div className={className}>
+    <div className={`min-w-0 ${className ?? ""}`}>
       <label htmlFor={id} className="mono-label block">{t("Школа")}</label>
       <div className="relative mt-1">
         <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-mute" />
@@ -144,7 +148,7 @@ function SchoolSelect({
           onChange={(event) => onChange({ school: event.target.value })}
           placeholder={t("Все школы")}
           autoComplete="off"
-          className="field-box h-[38px] w-full pl-8 text-[13px]"
+          className="field-box rounded-lg pl-8"
         />
         <datalist id={`${id}-options`}>
           {schools.map((school) => <option key={school} value={school} />)}
@@ -238,14 +242,14 @@ function QuietSelect({
           id={id}
           value={value}
           onChange={onChange}
-          className="select-quiet w-full pr-5"
+          className="field-box appearance-none rounded-lg pr-8"
         >
           {children}
         </select>
         <svg
           viewBox="0 0 12 12"
           aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 right-0 size-3 -translate-y-1/2 text-ink-mute"
+          className="pointer-events-none absolute top-1/2 right-3 size-3 -translate-y-1/2 text-ink-mute"
         >
           <path
             d="m3 4.5 3 3 3-3"

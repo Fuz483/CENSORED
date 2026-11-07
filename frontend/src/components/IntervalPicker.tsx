@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { BookingRequest, Listing, Slot } from "../lib/types";
-import { intervalHours, intervalPrice, money } from "../lib/format";
+import { durationLabel, intervalHours, intervalPrice, money } from "../lib/format";
 import { BOOKING_STEP_MINUTES, isRangeAvailable, MIN_BOOKING_MINUTES, timeToMinutes } from "../lib/intervals";
 import { useLanguage } from "../lib/i18n";
 
@@ -16,10 +16,10 @@ export function IntervalPicker({
   date: string;
   slots: Slot[];
   selected?: BookingRequest;
-  onChange: (startTime: string, endTime: string) => void;
+  onChange?: (startTime: string, endTime: string) => void;
   onConfirm?: (startTime: string, endTime: string) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const times = useMemo(
     () => slots.filter((slot) => slot.listingId === listing.id && slot.date === date)
       .sort((a, b) => a.startTime.localeCompare(b.startTime)),
@@ -84,7 +84,7 @@ export function IntervalPicker({
   const update = (nextStart: string, nextEnd: string) => {
     setStartTime(nextStart);
     setEndTime(nextEnd);
-    onChange(nextStart, nextEnd);
+    onChange?.(nextStart, nextEnd);
   };
   const updateFromPointer = (event: PointerEvent<HTMLDivElement>, handle: "start" | "end") => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -116,88 +116,103 @@ export function IntervalPicker({
   };
 
   return (
-    <div className="interval-picker" onClick={(event) => event.stopPropagation()}>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="flex items-center justify-between gap-2 border border-line bg-paper/50 px-3 py-2">
-          <span className="text-[13px] text-ink-soft">{t("Начало")}</span>
-          <span className="font-mono text-[16px] font-medium tabular-nums text-ink">{startTime}</span>
+    <div className="min-w-0 space-y-3 sm:space-y-4" onClick={(event) => event.stopPropagation()}>
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+        <div className="min-w-0 rounded-lg border border-line bg-surface p-3 sm:px-4">
+          <p className="wrap-break-word text-sm font-medium text-ink-soft sm:text-base">{t("Начало")}</p>
+          <p className="mt-1.5 text-[22px] leading-none font-bold tabular-nums sm:text-[26px]">{startTime}</p>
         </div>
-        <div className="flex items-center justify-between gap-2 border border-line bg-paper/50 px-3 py-2">
-          <span className="text-[13px] text-ink-soft">{t("Окончание")}</span>
-          <span className="font-mono text-[16px] font-medium tabular-nums text-ink">{endTime}</span>
+        <div className="min-w-0 rounded-lg border border-line bg-surface p-3 sm:px-4">
+          <p className="wrap-break-word text-sm font-medium text-ink-soft sm:text-base">{t("Окончание")}</p>
+          <p className="mt-1.5 text-[22px] leading-none font-bold tabular-nums sm:text-[26px]">{endTime}</p>
         </div>
       </div>
 
-      <div
-        className="interval-slider mt-3"
-        style={{ "--range-start": `${startPercent}%`, "--range-end": `${endPercent}%` } as CSSProperties}
-        onPointerDown={beginPointer}
-        onPointerMove={movePointer}
-        onPointerUp={endPointer}
-        onPointerCancel={endPointer}
-      >
-        <div className="interval-slider__rail" />
-        {availableRanges.map((range, index) => (
-          <div
-            key={`${range.start}-${range.end}-${index}`}
-            className="interval-slider__availability"
-            style={{
-              "--range-start": `${(range.start / (maxMinutes - minMinutes)) * 100}%`,
-              "--range-width": `${((range.end - range.start) / (maxMinutes - minMinutes)) * 100}%`,
-            } as CSSProperties}
-          />
-        ))}
-        <div className="interval-slider__selection" />
-        <input
-          type="range"
-          min={0}
-          max={maxIndex}
-          step={1}
-          value={startIndex}
-          onChange={(event) => updateStart(Number(event.target.value))}
-          disabled={!canFitMinimum}
-          className="interval-slider__input interval-slider__input--start"
-          aria-label={t("Начало")}
-          aria-valuetext={startTime}
-        />
-        <input
-          type="range"
-          min={0}
-          max={maxIndex}
-          step={1}
-          value={endIndex}
-          onChange={(event) => updateEnd(Number(event.target.value))}
-          disabled={!canFitMinimum}
-          className="interval-slider__input interval-slider__input--end"
-          aria-label={t("Окончание")}
-          aria-valuetext={endTime}
-        />
-      </div>
-
-      <div className="mt-2 flex justify-between font-mono text-[12px] tabular-nums text-ink-soft" aria-hidden="true">
-        <span>{min}</span>
-        <span>{formatTime(minMinutes + Math.round(maxIndex / 2) * BOOKING_STEP_MINUTES)}</span>
-        <span>{max}</span>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-soft">
-        <span className="inline-flex items-center gap-2"><i className="size-3 rounded-[2px] bg-blue" />{t("Доступное время")}</span>
-        <span className="inline-flex items-center gap-2"><i className="size-3 rounded-[2px] bg-orange" />{t("Ваш выбор")}</span>
-      </div>
-
-      <div className="mt-3 flex min-h-9 items-center justify-between gap-3 border-t border-line pt-3">
-        <p className="text-[14px] font-medium text-ink">
-          {intervalHours(startTime, endTime)} ч
-          {!valid && <span className="ml-2 text-[13px] font-normal text-orange">{t("Интервал недоступен")}</span>}
+      <div className="rounded-lg border border-line bg-surface p-3 sm:px-4">
+        <p className="text-sm leading-snug text-ink-soft sm:text-base">
+          {t("Перетащите ползунки, чтобы изменить время.")}
         </p>
-        <p className="font-serif text-[20px] font-semibold tabular-nums">{money(intervalPrice(listing.price, startTime, endTime))}</p>
-      </div>
-      {onConfirm && (
-        <div className="mt-6 flex justify-end border-t border-line pt-4">
-          <button type="button" disabled={!valid} onClick={() => onConfirm(startTime, endTime)}
-            className="btn btn-primary h-10 px-5 disabled:opacity-50">{t("Готово")}</button>
+        <div
+          className="interval-slider mt-2"
+          style={{ "--range-start": `${startPercent}%`, "--range-end": `${endPercent}%` } as CSSProperties}
+          onPointerDown={beginPointer}
+          onPointerMove={movePointer}
+          onPointerUp={endPointer}
+          onPointerCancel={endPointer}
+        >
+          <div className="interval-slider__rail rounded-lg" />
+          {availableRanges.map((range, index) => (
+            <div
+              key={`${range.start}-${range.end}-${index}`}
+              className="interval-slider__availability rounded-md"
+              style={{
+                "--range-start": `${(range.start / (maxMinutes - minMinutes)) * 100}%`,
+                "--range-width": `${((range.end - range.start) / (maxMinutes - minMinutes)) * 100}%`,
+              } as CSSProperties}
+            />
+          ))}
+          <div className="interval-slider__selection rounded-md" />
+          <input
+            type="range"
+            min={0}
+            max={maxIndex}
+            step={1}
+            value={startIndex}
+            onChange={(event) => updateStart(Number(event.target.value))}
+            disabled={!canFitMinimum}
+            className="interval-slider__input interval-slider__input--start"
+            aria-label={t("Начало")}
+            aria-valuetext={startTime}
+          />
+          <input
+            type="range"
+            min={0}
+            max={maxIndex}
+            step={1}
+            value={endIndex}
+            onChange={(event) => updateEnd(Number(event.target.value))}
+            disabled={!canFitMinimum}
+            className="interval-slider__input interval-slider__input--end"
+            aria-label={t("Окончание")}
+            aria-valuetext={endTime}
+          />
         </div>
-      )}
+        <div className="flex justify-between text-sm font-semibold tabular-nums text-ink-soft sm:text-base" aria-hidden="true">
+          <span>{min}</span>
+          <span>{formatTime(minMinutes + Math.round(maxIndex / 2) * BOOKING_STEP_MINUTES)}</span>
+          <span>{max}</span>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-ink-soft">
+          <span className="inline-flex items-center gap-2"><i className="size-3 shrink-0 rounded-sm bg-blue" aria-hidden="true" />{t("Доступное время")}</span>
+          <span className="inline-flex items-center gap-2"><i className="size-3 shrink-0 rounded-sm bg-orange" aria-hidden="true" />{t("Ваш выбор")}</span>
+        </div>
+      </div>
+
+      <div className="rounded-lg bg-sky-soft/65 p-3 sm:px-4">
+        <dl className="grid grid-cols-2 gap-2">
+          <div className="min-w-0">
+            <dt className="text-sm text-ink-soft">{t("Длительность")}</dt>
+            <dd className="mt-1 text-lg font-semibold tabular-nums sm:text-xl">{durationLabel(intervalHours(startTime, endTime), language)}</dd>
+          </div>
+          <div className="min-w-0 text-right">
+            <dt className="text-sm text-ink-soft">{t("Тариф за интервал")}</dt>
+            <dd className="mt-1 wrap-break-word text-lg font-bold tabular-nums sm:text-xl">{money(intervalPrice(listing.price, startTime, endTime))}</dd>
+          </div>
+        </dl>
+        {!valid && <p role="status" className="mt-2.5 rounded-lg border border-orange/25 bg-orange-soft p-2.5 text-sm font-semibold">{t("Интервал недоступен")}</p>}
+        {onConfirm && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              disabled={!valid}
+              onClick={() => onConfirm(startTime, endTime)}
+              className="btn btn-primary min-h-12 w-full rounded-lg px-6 text-base disabled:opacity-50 sm:w-auto"
+            >
+              {t("Готово")}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

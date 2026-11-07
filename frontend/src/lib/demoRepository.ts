@@ -9,9 +9,10 @@ import {
   type NewListingInput,
   type ProfileInput,
   type RegisterInput,
+  type UpdateListingInput,
 } from "./repository";
 import type { Booking, GuardScanResult, Listing, Slot, User } from "./types";
-import { intervalPrice } from "./format";
+import { intervalPrice, minskBookingTime } from "./format";
 import { isRangeAvailable, isValidAvailabilityWindow } from "./intervals";
 
 interface DemoBookingSpec {
@@ -260,29 +261,27 @@ export class DemoRepository implements AppRepository {
     return listing;
   }
 
-  async updateListing(user: User, listingId: number, input: NewListingInput): Promise<Listing> {
+  async updateListing(user: User, listingId: number, input: UpdateListingInput): Promise<Listing> {
     if (user.role !== "master") throw new RepositoryError("Нет доступа к изменению пространства.");
     const existing = this.snapshot.listings.find(
       (item) => item.id === listingId && item.ownerId === user.user_id,
     );
     if (!existing) throw new RepositoryError("Пространство не найдено или недоступно.");
-    const today = new Date().toISOString().slice(0, 10);
-    if (this.snapshot.bookings.some((booking) => booking.listing.id === listingId && booking.date >= today)) {
-      throw new RepositoryError("Нельзя изменить пространство: у него есть занятые часы.", "LISTING_BOOKED");
-    }
-    if (
-      !input.image || !input.room.trim() || !input.school.trim() || !input.address.trim() ||
-      !Number.isFinite(input.price) || input.price <= 0 ||
-      !Number.isFinite(input.capacity) || input.capacity <= 0 ||
-      !isValidAvailabilityWindow(input.availableFrom, input.availableTo)
-    ) throw new RepositoryError("Проверьте данные пространства и добавьте фотографию.");
-
     const updated: Listing = {
-      ...existing, school: input.school.trim(), uo: input.uo, address: input.address.trim(),
-      type: input.type, room: input.room.trim(), capacity: input.capacity,
-      price: input.price, image: input.image,
-      availableFrom: input.availableFrom, availableTo: input.availableTo,
+      ...existing, ...input,
+      school: input.school?.trim() ?? existing.school,
+      room: input.room?.trim() ?? existing.room,
+      address: input.address?.trim() ?? existing.address,
     };
+    if (
+      !updated.image || !updated.room || !updated.school ||
+      !Number.isFinite(updated.price) || updated.price < 0 ||
+      (updated.capacity !== null && (!Number.isInteger(updated.capacity) || updated.capacity <= 0)) ||
+      !isValidAvailabilityWindow(updated.availableFrom, updated.availableTo)
+    ) throw new RepositoryError("Проверьте данные пространства и добавьте фотографию.");
+    if (this.hasActiveBookings(listingId)) {
+      throw new RepositoryError("Нельзя менять помещение с активными бронями", "LISTING_BOOKED");
+    }
     this.snapshot.listings = this.snapshot.listings.map((item) => item.id === listingId ? updated : item);
     const nextSlotId = this.snapshot.slots.reduce((max, slot) => Math.max(max, slot.id), 0) + 1;
     this.snapshot.slots = [
@@ -298,12 +297,19 @@ export class DemoRepository implements AppRepository {
       (item) => item.id === listingId && item.ownerId === user.user_id,
     );
     if (!existing) throw new RepositoryError("Пространство не найдено или недоступно.");
-    const today = new Date().toISOString().slice(0, 10);
-    if (this.snapshot.bookings.some((booking) => booking.listing.id === listingId && booking.date >= today)) {
-      throw new RepositoryError("Нельзя удалить пространство: у него есть занятые часы.", "LISTING_BOOKED");
+    if (this.hasActiveBookings(listingId)) {
+      throw new RepositoryError("Нельзя убрать помещение с активными бронями", "LISTING_BOOKED");
     }
     this.snapshot.listings = this.snapshot.listings.filter((item) => item.id !== listingId);
     this.snapshot.slots = this.snapshot.slots.filter((slot) => slot.listingId !== listingId);
+  }
+
+  private hasActiveBookings(listingId: number): boolean {
+    const now = Date.now();
+    return this.snapshot.bookings.some((booking) =>
+      booking.listing.id === listingId && booking.state !== "cancelled" && booking.state !== "completed" &&
+      minskBookingTime(booking.date, booking.endTime) > now,
+    );
   }
 
   async createManualBooking(user: User, input: ManualBookingInput): Promise<Booking> {

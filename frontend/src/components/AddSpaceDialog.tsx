@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { ImagePlus, LoaderCircle, X } from "lucide-react";
 
+import { useDialog } from "../hooks/useDialog";
 import { DEMO_UO_DISTRICT, ROOM_TYPE_LIST, ROOM_TYPES, UO_LIST } from "../lib/data";
 import { cityFromAddress } from "../lib/belarus";
 import { fileToPhoto } from "../lib/images";
-import { errorMessage } from "../lib/repository";
+import { errorMessage, type UpdateListingInput } from "../lib/repository";
 import type { Listing, RoomType } from "../lib/types";
 import { useApp } from "../state/AppState";
 import { useLanguage } from "../lib/i18n";
@@ -22,14 +23,17 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
   const { user, addListing, updateListing } = useApp();
   const { t } = useLanguage();
   const fileRef = useRef<HTMLInputElement>(null);
+  const initialAddress = listing?.address === "Адрес уточняется" ? "" : listing?.address ?? "";
+  const initialCity = listing
+    ? listing.city || cityFromAddress(initialAddress)
+    : user?.name === "Лицей БГУ" ? "Минск" : "";
   const [type, setType] = useState<RoomType>(listing?.type ?? "gym");
   const [uo, setUo] = useState(listing?.uo ?? DEMO_UO_DISTRICT);
   const [room, setRoom] = useState(listing?.room ?? "");
-  const [address, setAddress] = useState(listing?.address ?? "");
-  const defaultCity = user?.name === "Лицей БГУ" ? "Минск" : "";
-  const [city, setCity] = useState(listing?.city || cityFromAddress(listing?.address ?? "") || defaultCity);
+  const [address, setAddress] = useState(initialAddress);
+  const [city, setCity] = useState(initialCity);
   const [cityDistrict, setCityDistrict] = useState(listing?.cityDistrict ?? "");
-  const [capacity, setCapacity] = useState(String(listing?.capacity ?? ROOM_TYPES.gym.capacity));
+  const [capacity, setCapacity] = useState(String(listing ? listing.capacity ?? "" : ROOM_TYPES.gym.capacity));
   const [price, setPrice] = useState(String(listing?.price ?? ROOM_TYPES.gym.price));
   const [availableFrom, setAvailableFrom] = useState(listing?.availableFrom ?? "14:00");
   const [availableTo, setAvailableTo] = useState(listing?.availableTo ?? "21:00");
@@ -39,16 +43,17 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useDialog<HTMLDivElement>(onClose, { open: open && Boolean(user), closeOnEscape: !saving });
 
   useEffect(() => {
     if (open) {
       setType(listing?.type ?? "gym");
       setUo(listing?.uo ?? DEMO_UO_DISTRICT);
       setRoom(listing?.room ?? "");
-      setAddress(listing?.address ?? "");
-      setCity(listing?.city || cityFromAddress(listing?.address ?? "") || defaultCity);
+      setAddress(initialAddress);
+      setCity(initialCity);
       setCityDistrict(listing?.cityDistrict ?? "");
-      setCapacity(String(listing?.capacity ?? ROOM_TYPES.gym.capacity));
+      setCapacity(String(listing ? listing.capacity ?? "" : ROOM_TYPES.gym.capacity));
       setPrice(String(listing?.price ?? ROOM_TYPES.gym.price));
       setAvailableFrom(listing?.availableFrom ?? "14:00");
       setAvailableTo(listing?.availableTo ?? "21:00");
@@ -56,28 +61,16 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
       setFileName("");
       setError(null);
     }
-  }, [defaultCity, listing, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previous;
-    };
-  }, [onClose, open, saving]);
+  }, [initialAddress, initialCity, listing, open]);
 
   if (!open || !user) return null;
 
   const changeType = (next: RoomType) => {
     setType(next);
-    setCapacity(String(ROOM_TYPES[next].capacity));
-    setPrice(String(ROOM_TYPES[next].price));
+    if (!listing) {
+      setCapacity(String(ROOM_TYPES[next].capacity));
+      setPrice(String(ROOM_TYPES[next].price));
+    }
   };
 
   const readPhoto = async (file: File | undefined) => {
@@ -103,27 +96,29 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (saving || uploading || !city) return;
+    if (saving || uploading || (!listing && !city)) return;
     const numericCapacity = Number(capacity);
     const numericPrice = Number(price);
+    const nextRoom = room.trim();
+    const nextAddress = address.trim();
 
-    if (!image) {
+    if (!listing && !image) {
       setError(t("Добавьте фотографию пространства — без неё объявление не опубликуется."));
       return;
     }
-    if (!room.trim()) {
+    if (!nextRoom) {
       setError(t("Напишите название пространства."));
       return;
     }
-    if (!address.trim()) {
+    if (!listing && !nextAddress) {
       setError(t("Укажите адрес учреждения."));
       return;
     }
-    if (!Number.isFinite(numericCapacity) || numericCapacity < 1) {
+    if ((!listing || capacity !== "") && (!Number.isInteger(numericCapacity) || numericCapacity < 1)) {
       setError(t("Укажите вместимость больше нуля."));
       return;
     }
-    if (!Number.isFinite(numericPrice) || numericPrice < 1) {
+    if (!price.trim() || !Number.isFinite(numericPrice) || numericPrice < (listing ? 0 : 1)) {
       setError(t("Укажите цену за час больше нуля."));
       return;
     }
@@ -131,24 +126,41 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
     setSaving(true);
     setError(null);
     try {
-      const input = {
-        school: listing?.school ?? user.name,
-        uo,
-        address,
-        city,
-        cityDistrict,
-        type,
-        room,
-        capacity: Math.round(numericCapacity),
-        price: Math.round(numericPrice),
-        availableFrom,
-        availableTo,
-        image,
-      };
-      const saved = listing
-        ? await updateListing(listing.id, input)
-        : await addListing(input);
-      onSaved(saved);
+      if (listing) {
+        const changes: UpdateListingInput = {};
+        const nextCapacity = capacity === "" ? null : numericCapacity;
+        if (uo !== listing.uo) changes.uo = uo;
+        if (nextAddress !== initialAddress.trim()) changes.address = nextAddress;
+        if (city !== initialCity) changes.city = city;
+        if (cityDistrict !== (listing.cityDistrict ?? "")) changes.cityDistrict = cityDistrict;
+        if (type !== listing.type) changes.type = type;
+        if (nextRoom !== listing.room) changes.room = nextRoom;
+        if (nextCapacity !== listing.capacity) changes.capacity = nextCapacity;
+        if (numericPrice !== listing.price) changes.price = numericPrice;
+        if (availableFrom !== listing.availableFrom) changes.availableFrom = availableFrom;
+        if (availableTo !== listing.availableTo) changes.availableTo = availableTo;
+        if (fileName) changes.image = image;
+        if (Object.keys(changes).length === 0) {
+          onClose();
+          return;
+        }
+        onSaved(await updateListing(listing.id, changes));
+      } else {
+        onSaved(await addListing({
+          school: user.name,
+          uo,
+          address: nextAddress,
+          city,
+          cityDistrict,
+          type,
+          room: nextRoom,
+          capacity: numericCapacity,
+          price: numericPrice,
+          availableFrom,
+          availableTo,
+          image,
+        }));
+      }
     } catch (caught) {
       setError(t(errorMessage(caught, "Не удалось сохранить пространство. Проверьте поля и попробуйте ещё раз.")));
     } finally {
@@ -158,18 +170,20 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
 
   return (
     <div
-      className="overlay-in fixed inset-0 z-50 flex items-end justify-center bg-navy/50 sm:items-center sm:p-4"
+      className="overlay-in fixed inset-0 z-50 flex items-end justify-center bg-navy/50 p-2 sm:items-center sm:p-4"
       onClick={saving ? undefined : onClose}
       role="presentation"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-space-title"
-        className="sheet-in flex max-h-[94dvh] w-full max-w-[580px] flex-col overflow-y-auto rounded-t-[10px] border border-line bg-surface sm:rounded-[6px] sm:shadow-[0_24px_80px_rgba(13,36,55,0.18)]"
+        className="sheet-in flex max-h-[calc(100dvh-1rem)] w-full max-w-[580px] flex-col overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface outline-none sm:max-h-[calc(100dvh-2rem)] sm:shadow-[0_24px_80px_rgba(13,36,55,0.18)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4 sm:px-6">
+        <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-4 py-2.5 sm:px-6 sm:py-4">
           <div>
             <h2 id="add-space-title" className="text-[22px] tracking-[-0.025em]">
               {t(listing ? "Редактировать пространство" : "Добавить пространство")}
@@ -179,7 +193,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="grid size-8 shrink-0 place-items-center text-ink-mute transition-colors hover:text-ink"
+            className="grid size-11 shrink-0 place-items-center rounded-full text-ink-mute transition-colors hover:bg-paper hover:text-ink sm:size-9"
             aria-label={t("Закрыть")}
           >
             <X className="size-4" strokeWidth={1.8} />
@@ -194,13 +208,13 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
               </label>
               <input
                 id="space-school"
-                value={user.name}
+                value={listing?.school ?? user.name}
                 readOnly
                 className="field-box bg-paper-2/60 text-ink-soft"
               />
             </div>
 
-            <LocationFields prefix="space" city={city} district={cityDistrict} required
+            <LocationFields prefix="space" city={city} district={cityDistrict} required={!listing}
               onCityChange={(value) => { setCity(value); setCityDistrict(""); }} onDistrictChange={setCityDistrict} />
 
             <div>
@@ -213,6 +227,9 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                 onChange={(event) => setUo(event.target.value)}
                 className="field-box cursor-pointer"
               >
+                {listing && !UO_LIST.some((item) => item === listing.uo) && (
+                  <option value={listing.uo}>{listing.uo || t("Не указан")}</option>
+                )}
                 {UO_LIST.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -269,7 +286,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                 }}
                 placeholder={t("Например, ул. Примерная, 10")}
                 autoComplete="street-address"
-                required
+                required={!listing}
                 className="field-box"
               />
             </div>
@@ -282,7 +299,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                 id="space-capacity"
                 type="number"
                 min={1}
-                max={500}
+                max={listing ? 2_147_483_647 : 500}
                 inputMode="numeric"
                 value={capacity}
                 onChange={(event) => setCapacity(event.target.value)}
@@ -297,9 +314,10 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
               <input
                 id="space-price"
                 type="number"
-                min={1}
-                max={999}
-                inputMode="numeric"
+                min={listing ? 0 : 1}
+                max={listing ? 99_999_999.99 : 999}
+                step={listing ? 0.01 : 1}
+                inputMode={listing ? "decimal" : "numeric"}
                 value={price}
                 onChange={(event) => setPrice(event.target.value)}
                 className="field-box tabular-nums"
@@ -325,7 +343,7 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                 }}
                 onDragLeave={() => setDragging(false)}
                 onDrop={onDrop}
-                className={`relative flex min-h-[190px] cursor-pointer flex-col items-center justify-center overflow-hidden border border-dashed transition-colors ${
+                className={`relative flex min-h-[190px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border border-dashed transition-colors ${
                   dragging ? "border-orange bg-orange-soft/40" : "border-line-strong bg-paper/60"
                 }`}
               >
@@ -337,11 +355,11 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                     <div className="absolute inset-0 bg-navy/20" />
-                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-navy/80 px-3 py-2.5 text-paper">
-                      <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.06em]">
+                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-navy/80 px-3 py-2.5 text-on-navy">
+                      <span className="min-w-0 truncate font-mono text-[13px] uppercase tracking-[0.06em]">
                         {fileName || t("фото добавлено")}
                       </span>
-                      <span className="shrink-0 text-[12px] text-orange-soft">
+                      <span className="shrink-0 text-[14px] text-on-navy-accent">
                         {t("Заменить")}
                       </span>
                     </div>
@@ -353,10 +371,10 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                     ) : (
                       <ImagePlus className="mx-auto size-6 text-ink-mute" strokeWidth={1.5} />
                     )}
-                    <p className="mt-3 text-[13px] font-medium">
+                    <p className="mt-3 text-[15px] font-medium">
                       {uploading ? t("Готовим фотографию…") : t("Перетащите фото сюда")}
                     </p>
-                    <p className="mt-1 text-[12px] leading-relaxed text-ink-mute">
+                    <p className="mt-1 text-[14px] leading-relaxed text-ink-soft">
                       {t("или нажмите, чтобы выбрать JPG, PNG или WebP")}
                     </p>
                   </div>
@@ -370,31 +388,31 @@ export function AddSpaceDialog({ open, onClose, onSaved, listing }: AddSpaceDial
                   onChange={(event) => void readPhoto(event.target.files?.[0])}
                 />
               </label>
-              <p className="mt-2 text-[11.5px] leading-relaxed text-ink-mute">
-              {t("Фото увидит клиент в каталоге. Лучше всего подходит горизонтальный кадр интерьера.")}
+              <p className="mt-2 text-[14px] leading-relaxed text-ink-soft">
+                {t("Фото увидит клиент в каталоге. Лучше всего подходит горизонтальный кадр интерьера.")}
               </p>
             </div>
           </div>
 
           {error && (
-            <p role="alert" className="mt-4 text-[12px] leading-relaxed text-orange">
+            <p role="alert" className="mt-4 border-l-2 border-orange pl-3 text-[14px] leading-relaxed text-ink">
               {error}
             </p>
           )}
 
-          <div className="mt-6 flex gap-2 border-t border-line pt-4">
+          <div className="mt-6 grid gap-2 border-t border-line pt-4 min-[440px]:grid-cols-2">
             <button
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="btn btn-quiet flex-1"
+              className="btn btn-quiet"
             >
               {t("Отмена")}
             </button>
             <button
               type="submit"
               disabled={uploading || saving}
-              className="btn btn-primary flex-1"
+              className="btn btn-primary"
             >
               {t(listing ? "Сохранить изменения" : "Опубликовать")}
             </button>

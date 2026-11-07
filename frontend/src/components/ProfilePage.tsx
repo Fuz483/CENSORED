@@ -42,8 +42,8 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <main className="mx-auto min-h-[calc(100dvh-4rem)] max-w-[1180px] px-5 py-8 sm:px-8 sm:py-12">
-      <button type="button" onClick={onBack} className="archive-link inline-flex items-center gap-2 text-[13px]">
+    <main className="page-shell min-h-[calc(100dvh-4rem)] py-8 sm:py-12">
+      <button type="button" onClick={onBack} className="archive-link inline-flex items-center gap-2 text-[15px]">
         <ArrowLeft className="size-4" /> {t("Вернуться в каталог")}
       </button>
       <section className="mt-9 grid gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-20">
@@ -54,14 +54,14 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
           <div className="mt-8 border-t border-line pt-5">
             <span className="label">{t("Аккаунт")}</span>
             <p className="mt-2 text-[14px]">{user?.name}</p>
-            <p className="mt-1 font-mono text-[11px] text-ink-mute">{t(user?.role === "master" ? "Кабинет УО" : "Арендатор")}</p>
+            <p className="mt-1 font-mono text-[13px] text-ink-mute">{t(user?.role === "master" ? "Кабинет УО" : "Арендатор")}</p>
           </div>
         </div>
 
-        <form onSubmit={submit} className="border border-ink/15 bg-surface p-5 sm:p-8">
+        <form onSubmit={submit} className="rounded-xl border border-ink/15 bg-surface p-5 sm:p-8">
           <div className="border-b border-line pb-4">
             <span className="mono-label">{t("Контактные данные")}</span>
-            <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">{t("Изменения сохраняются в вашем аккаунте на сервере.")}</p>
+            <p className="mt-2 text-[15px] leading-relaxed text-ink-soft">{t("Изменения сохраняются в вашем аккаунте на сервере.")}</p>
           </div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <ProfileField id="profile-surname" label={t("Фамилия")} value={surname} onChange={setSurname} autoComplete="family-name" required />
@@ -70,7 +70,7 @@ export function ProfilePage({ onBack }: { onBack: () => void }) {
             <ProfileField id="profile-email" label={`${t("Электронная почта")} · ${t("необязательно")} `} value={email} onChange={setEmail} autoComplete="email" type="email" />
             <div className="sm:col-span-2"><ProfileField id="profile-phone" label={t("Телефон")} value={phone} onChange={setPhone} autoComplete="tel" type="tel" required /></div>
           </div>
-          {(error || saved) && <p role={error ? "alert" : "status"} className={`mt-5 text-[13px] ${error ? "text-orange" : "text-blue"}`}>{error ? t(error) : <span className="inline-flex items-center gap-1.5"><Check className="size-4" />{t("Профиль сохранён")}</span>}</p>}
+          {(error || saved) && <p role={error ? "alert" : "status"} className={`mt-5 text-[15px] ${error ? "text-orange" : "text-blue"}`}>{error ? t(error) : <span className="inline-flex items-center gap-1.5"><Check className="size-4" />{t("Профиль сохранён")}</span>}</p>}
           <button type="submit" disabled={saving} className="btn btn-primary mt-6 h-12 w-full sm:w-auto sm:min-w-[220px]">{saving ? t("Сохраняем…") : t("Сохранить профиль")}</button>
         </form>
       </section>

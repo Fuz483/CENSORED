@@ -1,15 +1,25 @@
 import datetime
 from decimal import Decimal
-from typing import List
 from pydantic import BaseModel, Field
-from schemas.booking import BookingResponse
-from schemas.user import UserResponse
+from schemas.booking import BookingState
 
 
 class QRScanRequest(BaseModel):
     """Схема входящего запроса от терминала поста охраны при сканировании QR-пропуска."""
 
     code: str = Field(..., min_length=4, max_length=64, description="Уникальный код QR-пропуска")
+
+
+class QRVisitor(BaseModel):
+    name: str = ""
+    phone: str = ""
+
+
+class QRScanSlot(BaseModel):
+    date: datetime.date
+    start_time: datetime.time
+    end_time: datetime.time
+    state: BookingState
 
 
 class QRScanResponse(BaseModel):
@@ -25,5 +35,5 @@ class QRScanResponse(BaseModel):
     session_end: datetime.time
     slots_count: int
     total_price: Decimal = Field(..., description="Суммарная стоимость всех слотов сессии в BYN")
-    user: UserResponse
-    slots: List[BookingResponse]
+    user: QRVisitor
+    slots: list[QRScanSlot]

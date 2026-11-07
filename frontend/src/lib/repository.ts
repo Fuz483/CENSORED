@@ -1,4 +1,4 @@
-import type { Booking, BookingRequest, GuardScanResult, Listing, RentalAgreement, Slot, User, WeeklyReservation } from "./types";
+import type { Booking, BookingRequest, CustomerSuggestion, GuardScanResult, Listing, RentalAgreement, ReservedVisit, Slot, User, WeeklyReservation, WeeklyReservationInput } from "./types";
 
 export interface CaptchaChallenge {
   id: string;
@@ -9,6 +9,12 @@ export interface LoginInput {
   role: User["role"];
   phone: string;
   password: string;
+  institutionId?: string;
+}
+
+export interface UoInstitution {
+  id: string;
+  name: string;
 }
 
 export interface RegisterInput {
@@ -39,6 +45,8 @@ export interface NewListingInput {
   image: string;
 }
 
+export type UpdateListingInput = Partial<Omit<NewListingInput, "capacity">> & { capacity?: number | null };
+
 export interface ManualBookingInput {
   listingId: number;
   date: string;
@@ -54,6 +62,7 @@ export interface AppSnapshot {
   slots: Slot[];
   bookings: Booking[];
   weeklyReservations?: WeeklyReservation[];
+  reservedVisits?: ReservedVisit[];
 }
 
 /**
@@ -67,17 +76,21 @@ export interface AppRepository {
   load(user?: User): Promise<AppSnapshot>;
   uploadRoomPhoto(user: User, listing: Listing, file: File): Promise<void>;
   login(input: LoginInput): Promise<User>;
+  listUoInstitutions?(): Promise<UoInstitution[]>;
   getCaptcha?(): Promise<CaptchaChallenge>;
   register(input: RegisterInput): Promise<User>;
   updateProfile(user: User, input: ProfileInput): Promise<User>;
   previewAgreements?(user: User, requests: BookingRequest[]): Promise<RentalAgreement[]>;
   bookSlots(user: User, requests: BookingRequest[], agreementTokens: string[]): Promise<Booking[]>;
-  createWeeklyReservation?(input: Omit<WeeklyReservation, "id">): Promise<void>;
+  createWeeklyReservation?(input: WeeklyReservationInput): Promise<void>;
+  linkWeeklyCustomer?(id: number, phone: string, customerId?: string): Promise<void>;
+  searchCustomers?(phone: string): Promise<CustomerSuggestion[]>;
+  setWeeklyEndDate?(id: number, endsOn: string): Promise<void>;
   cancelWeeklyReservation?(id: number): Promise<void>;
   scanQr(code: string): Promise<GuardScanResult>;
   cancelBooking(user: User, bookingId: number): Promise<void>;
   addListing(user: User, input: NewListingInput): Promise<Listing>;
-  updateListing(user: User, listingId: number, input: NewListingInput): Promise<Listing>;
+  updateListing(user: User, listingId: number, input: UpdateListingInput): Promise<Listing>;
   deleteListing(user: User, listingId: number): Promise<void>;
   createManualBooking(user: User, input: ManualBookingInput): Promise<Booking>;
 }
